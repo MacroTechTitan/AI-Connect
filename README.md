@@ -5,6 +5,8 @@
 
 `aiconnect.macrotechtitan.com` · MIT License · Built by [Macro Tech Titan](https://macrotechtitan.com)
 
+**See also:** [FEATURES.md](FEATURES.md) (what AI Connect solves and what's shipped) · [docs/MTTBuild.md](docs/MTTBuild.md) (the methodology) · [SPRINT_0_HANDOFF.md](SPRINT_0_HANDOFF.md) (handoff text for Sprint 0)
+
 ---
 
 ## Table of Contents
