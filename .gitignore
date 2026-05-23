@@ -51,3 +51,4 @@ tmp/
 # Drizzle local introspection cache (generated SQL itself is committed)
 apps/api/drizzle/.snapshot.json.bak
 apps/api/.drizzle-cache/
+.env*
