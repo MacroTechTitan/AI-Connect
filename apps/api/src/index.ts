@@ -1,6 +1,7 @@
 import express from "express";
 import { env } from "./lib/env.js";
 import { logger } from "./lib/logger.js";
+import { seedAdmin } from "./lib/seed.js";
 
 const app = express();
 
@@ -38,6 +39,16 @@ app.get("/version", (_req, res) => {
 app.use((_req, res) => {
   res.status(404).json({ error: "not_found" });
 });
+
+// Idempotent admin seed. Runs after routes are wired but before listen.
+// Wrapped to never crash boot — /health must come up even if the DB is down.
+try {
+  await seedAdmin();
+} catch (err) {
+  process.stderr.write(
+    `[boot] seedAdmin failed (continuing): ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`,
+  );
+}
 
 const port = env.PORT;
 const host = "0.0.0.0"; // MTTBuild Phase 0: bind explicitly, never default.
