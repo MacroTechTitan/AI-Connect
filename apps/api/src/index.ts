@@ -2,6 +2,7 @@ import express from "express";
 import { env } from "./lib/env.js";
 import { logger } from "./lib/logger.js";
 import { seedAdmin } from "./lib/seed.js";
+import { registerAdminRoutes } from "./routes/admin.js";
 
 const app = express();
 
@@ -34,7 +35,9 @@ app.get("/version", (_req, res) => {
 });
 
 // Routes that need DB / auth get wired in Task 10.
-// Diagnostics endpoint gets wired in Task 10b.
+
+// /api/admin/diagnostics — bearer-token-gated, does not touch /health or /version.
+registerAdminRoutes(app);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "not_found" });
