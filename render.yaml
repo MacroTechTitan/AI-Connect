@@ -1,0 +1,25 @@
+# Render Blueprint for AI Connect.
+# Reference: https://render.com/docs/blueprint-spec
+# Sprint 0 sets this up via the UI; this file is the canonical record.
+
+services:
+  - type: web
+    name: ai-connect-api
+    runtime: node
+    plan: starter
+    region: oregon
+    branch: master
+    rootDir: apps/api
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @ai-connect/shared build && pnpm --filter @ai-connect/api build
+    startCommand: pnpm --filter @ai-connect/api start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 8080
+      # Secrets are set in Render UI, never in this file:
+      # DATABASE_URL, AUTH0_ISSUER_BASE_URL, AUTH0_AUDIENCE,
+      # STRIPE_SECRET_KEY, STRIPE_PUBLISHABLE_KEY, STRIPE_WEBHOOK_SECRET,
+      # MASTER_KEY, DIAGNOSTICS_TOKEN

@@ -414,25 +414,89 @@ This section is the live build plan. Sprints are added one at a time as the prev
 
 ### Sprint 0 — Phase 0 infrastructure
 
-**Goal.** Stand up production-grade infrastructure for AI Connect at `aiconnect.macrotechtitan.com` against the MTTBuild Phase 0 checklist. Zero feature work. The deliverable is a green checklist and a deployed `/health` endpoint.
+**Goal.** Stand up production-grade infrastructure for AI Connect at `aiconnect.macrotechtitan.com` against the MTTBuild Phase 0 checklist. Zero feature work. The deliverable is a green checklist, a deployed `/health` endpoint, the Phase 0 database schema and logging wrapper in code, an idempotent admin seed on boot, and a bearer-token-gated diagnostics endpoint.
 
 **Acceptance criteria.**
-- New Vercel project deployed at `aiconnect.macrotechtitan.com`, serving a placeholder landing page
-- New Render web service deployed at `api.aiconnect.macrotechtitan.com`, serving `/health` returning 200
-- Render API server bound to `0.0.0.0`, environment variables loaded from Render env (not platform-specific secret services)
-- Supabase Postgres provisioned, IPv4-compatible session pooler connection string configured
-- Stripe env vars set (test mode initially): `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`
-- Auth0 application "AI Connect" created in `macrotechtitandev` tenant, callback URLs configured for `aiconnect.macrotechtitan.com` and `localhost:5173`
-- Auth0 API "AI Connect API" created with audience `https://api.aiconnect.macrotechtitan.com`
-- `systemLogs`, `userAuditLogs`, `devLogs` tables migrated, indexes created
-- Logging wrapper `lib/logging.ts` exposes `logSystem()`, `logUserAction()`, `logDev()`
-- `users` table migrated, admin user (`jgelet@macrotechtitan.com`) seeded idempotently
-- GitHub repo `MacroTechTitan/ai-connect` connected to Render and Vercel for auto-deploy on push to `master`
-- `docs/MTTBuild.md`, `docs/PROJECT_TEMPLATE_OVERRIDES.md`, `docs/sprints/SPRINT_LOG.md` committed
 
-**Out of scope.** No router, no chat UI, no provider integrations, no message bus, no Stripe products/prices yet. Just infra.
+1. **Monorepo.** pnpm workspace with `apps/api` (Express + TypeScript + Drizzle), `apps/web` (Vite + React), and `packages/shared`. `packages/shared` builds before either app in both local dev and the deploy pipelines.
+2. **API live.** `https://api.aiconnect.macrotechtitan.com/health` returns 200 with structured JSON (`status`, `service`, `version`, `timestamp`). DB-free, auth-free, synchronous.
+3. **Frontend live.** `https://aiconnect.macrotechtitan.com` serves the placeholder landing page over HTTPS with a valid Vercel-issued certificate.
+4. **Drizzle schema.** Four tables defined in `apps/api/src/db/schema.ts`: `users`, `systemLogs`, `userAuditLogs`, `devLogs`. Includes the required indexes per MTTBuild Phase 0 (`systemLogs(occurredAt,level)`, `systemLogs(category,occurredAt)`, `userAuditLogs(userId,occurredAt)`, `userAuditLogs(action,occurredAt)`, `devLogs(source,occurredAt)`, `devLogs(category,occurredAt)`) and a `CHECK` constraint on `systemLogs.level`.
+5. **Generated migration committed.** `apps/api/drizzle/0000_*.sql` exists in the repo. Schema is applied to Supabase **manually**, not via `drizzle-kit push` — never auto-applied at boot.
+6. **Logging wrapper.** `apps/api/src/lib/logging.ts` exposes `logSystem(level, category, message, context?, traceId?)`, `logUserAction(userId, action, targetType?, targetId?, context?, traceId?)`, and `logDev(source, category, message, context?, traceId?)`. `logUserAction` writes to both `userAuditLogs` and `systemLogs` in a single transaction sharing a `traceId`. All three swallow errors to stderr so logging never crashes the caller.
+7. **Idempotent admin seed.** `apps/api/src/lib/seed.ts` upserts `jgelet@macrotechtitan.com` as role `admin` via `ON CONFLICT (email) DO NOTHING` on every boot. Skips silently when `DATABASE_URL` is unset so dev without a DB still boots; seed failure logs to stderr but never crashes the process.
+8. **Admin diagnostics endpoint.** `GET /api/admin/diagnostics` is protected by bearer-token auth against `env.DIAGNOSTICS_TOKEN` (constant-time compare). Returns `service`, `version`, `timestamp`, `node`, `uptimeSeconds`, an `env` object of **boolean** presence checks (never values), and a `db` object with `configured` + `reachable` (`SELECT 1` bounded by a 2 s ceiling). 401 on any auth failure, including when `DIAGNOSTICS_TOKEN` is unset.
+9. **CLAUDE.md committed.** Full project context, layout, architecture invariants, secret-handling rules, methodology pointers, and production deployment state (service IDs, regions, env-var names, DNS records) — all in `CLAUDE.md` at the repo root.
+10. **DNS configured.** Cloudflare zone `macrotechtitan.com` has `api.aiconnect` CNAME → `ai-connect-api.onrender.com` and `aiconnect` A → `76.76.21.21`. Both records are **DNS-only (grey cloud)** — Vercel and Render terminate their own TLS at the edge.
+11. **Secrets hygiene.** All operational secrets (`DATABASE_URL`, `DIAGNOSTICS_TOKEN`, `MASTER_KEY`, Auth0 client ID/secret, Stripe keys) live in the Render/Vercel UIs and a password manager only — never in committed files, shell history, or the PowerShell `$PROFILE`. Any secret that appeared in chat, screenshots, or operator scratch has been rotated. `.env*` is gitignored.
+
+**Out of scope.** No router, no chat UI, no provider integrations, no message bus, no Stripe products/prices, no JWT verification middleware, no Sentry. Just infra plus the Phase 0 database/logging plumbing.
 
 **Stop and ask if.** Anything in the Phase 0 checklist doesn't apply cleanly to AI Connect's stack. Document the deviation in `docs/PROJECT_TEMPLATE_OVERRIDES.md`.
+
+#### How to verify Sprint 0 acceptance
+
+Run these from a clean checkout of `master` after Sprint 0 merges. Items 1–9 are automated; 10–11 require operator inspection.
+
+```bash
+# 1. Monorepo layout
+ls apps/api apps/web packages/shared
+pnpm -r build && pnpm -r typecheck
+
+# 2. API /health returns 200 with structured JSON
+curl -fsS https://api.aiconnect.macrotechtitan.com/health
+# Expected: {"status":"ok","service":"ai-connect-api","version":"...","timestamp":"..."}
+
+# 3. Frontend serves over HTTPS with valid cert
+curl -fsSI https://aiconnect.macrotechtitan.com | head -1
+# Expected: HTTP/2 200
+
+# 4. Drizzle schema — four tables exist with indexes
+#    Run against Supabase via psql or the SQL editor:
+#      SELECT table_name FROM information_schema.tables
+#       WHERE table_schema='public' ORDER BY table_name;
+#    Expected rows: dev_logs, system_logs, user_audit_logs, users
+#      SELECT indexname FROM pg_indexes
+#       WHERE schemaname='public' AND tablename IN ('system_logs','user_audit_logs','dev_logs')
+#       ORDER BY indexname;
+#    Expected: the six (category|action|source|userId|occurredAt)_idx indexes from §4.
+
+# 5. Generated migration is committed
+ls apps/api/drizzle/0000_*.sql
+git log --diff-filter=A --name-only -- apps/api/drizzle/
+
+# 6. Logging wrapper exports the three functions
+grep -E '^export (async )?function (logSystem|logUserAction|logDev)' apps/api/src/lib/logging.ts
+
+# 7. Admin user seeded
+#    SELECT email, role FROM users WHERE email = 'jgelet@macrotechtitan.com';
+#    Expected: one row with role='admin'.
+
+# 8. Diagnostics endpoint — token gate works and response shape is correct
+curl -fsS -o /dev/null -w '%{http_code}\n' https://api.aiconnect.macrotechtitan.com/api/admin/diagnostics
+# Expected: 401
+curl -fsS -H "Authorization: Bearer $DIAGNOSTICS_TOKEN" \
+  https://api.aiconnect.macrotechtitan.com/api/admin/diagnostics | jq .
+# Expected: service/version/timestamp/node/uptimeSeconds/env/db keys present;
+# every value under .env is a boolean; .db.reachable is true.
+
+# 9. CLAUDE.md present and non-trivial
+test -f CLAUDE.md && wc -l CLAUDE.md
+```
+
+```text
+# 10. DNS — DNS-only (grey cloud) at Cloudflare
+dig +short api.aiconnect.macrotechtitan.com   # → ai-connect-api.onrender.com → an IP
+dig +short aiconnect.macrotechtitan.com       # → 76.76.21.21
+# Confirm in the Cloudflare dashboard that both records show a grey cloud
+# icon (proxy off). Proxied (orange) breaks Vercel/Render edge TLS.
+
+# 11. Secrets hygiene (manual operator checks)
+# - Search shell history and PowerShell $PROFILE for any secret literals; rotate if found.
+# - Verify .env* is gitignored: git check-ignore .env
+# - Confirm Render and Vercel env var lists match CLAUDE.md "Production deployment state"
+#   and that no secret values are referenced inline in render.yaml or vercel.json.
+```
 
 ### Sprint 1 — Auth, identity, single-page shell
 
