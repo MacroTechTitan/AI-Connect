@@ -53,4 +53,11 @@ CREATE INDEX IF NOT EXISTS "dev_logs_category_occurred_at_idx" ON "dev_logs" USI
 CREATE INDEX IF NOT EXISTS "system_logs_occurred_at_level_idx" ON "system_logs" USING btree ("occurred_at","level");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "system_logs_category_occurred_at_idx" ON "system_logs" USING btree ("category","occurred_at");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "user_audit_logs_user_id_occurred_at_idx" ON "user_audit_logs" USING btree ("user_id","occurred_at");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "user_audit_logs_action_occurred_at_idx" ON "user_audit_logs" USING btree ("action","occurred_at");
+CREATE INDEX IF NOT EXISTS "user_audit_logs_action_occurred_at_idx" ON "user_audit_logs" USING btree ("action","occurred_at");--> statement-breakpoint
+ALTER TABLE "public"."users" DISABLE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "public"."system_logs" DISABLE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "public"."user_audit_logs" DISABLE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "public"."dev_logs" DISABLE ROW LEVEL SECURITY;
