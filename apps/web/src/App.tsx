@@ -132,12 +132,13 @@ export function App() {
         <section className="vision">
           <h2>Where this is going</h2>
           <p>
-            AI Connect&apos;s connector layer — built on Composio plus custom MCP
-            servers starting Sprint 6 — will eventually bridge AI agents to any
-            external system: WordPress, IoT devices, telecom APIs, email
+            AI Connect&apos;s connector layer will eventually bridge AI agents to
+            any external system — WordPress, IoT devices, telecom APIs, email
             infrastructure, mainframe gateways, Oracle ERPs, custom enterprise
-            systems. The methodology and core platform ship first; connectors
-            follow real user demand.
+            systems. We&apos;ll integrate with existing connector frameworks
+            where they fit and build custom MCP servers where they don&apos;t.
+            The methodology and core platform ship first; connectors follow real
+            user demand.
           </p>
         </section>
 
