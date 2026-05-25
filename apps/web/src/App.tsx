@@ -151,8 +151,19 @@ export function App() {
         </section>
 
         <footer className="footer">
-          <p>Built by Macro Tech Titan. Open-source under MIT.</p>
+          <p>
+            Built by{" "}
+            <a href="https://macrotechtitan.com">Macro Tech Titan</a>.
+            Open-source under MIT.
+          </p>
           <p>Hosted on Render + Vercel + Supabase.</p>
+          <p>
+            For full legal disclaimers and disclosures, see{" "}
+            <a href="https://legal.macrotechtitan.com">
+              legal.macrotechtitan.com
+            </a>
+            .
+          </p>
           <p>
             All third-party product names mentioned are trademarks of their
             respective owners.
