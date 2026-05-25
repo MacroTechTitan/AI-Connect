@@ -1,3 +1,4 @@
+import cors from "cors";
 import express from "express";
 import { env } from "./lib/env.js";
 import { logger } from "./lib/logger.js";
@@ -10,6 +11,25 @@ const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", true);
 app.use(express.json({ limit: "1mb" }));
+
+const allowedOrigins = [
+  "https://aiconnect.macrotechtitan.com",
+  "http://localhost:5173",
+];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (curl, server-to-server, mobile apps)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error("CORS: origin not allowed: " + origin), false);
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  }),
+);
 
 // /health — MTTBuild Phase 0 contract:
 // - returns 200 with no auth, no DB dependency
