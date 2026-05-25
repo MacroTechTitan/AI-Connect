@@ -1,13 +1,24 @@
+import { useAuth0 } from "@auth0/auth0-react";
 import { useEffect, useState } from "react";
 
 type HealthStatus = "pending" | "ok" | "down";
 
 const HEALTH_URL = "https://api.aiconnect.macrotechtitan.com/health";
+const API_BASE = import.meta.env.VITE_API_BASE_URL;
 const CHANGELOG_URL =
   "https://github.com/MacroTechTitan/AI-Connect/blob/master/CHANGELOG.md";
 
 export function App() {
   const [health, setHealth] = useState<HealthStatus>("pending");
+  const [role, setRole] = useState<string | undefined>(undefined);
+  const {
+    isAuthenticated,
+    isLoading,
+    user,
+    getAccessTokenSilently,
+    loginWithRedirect,
+    logout,
+  } = useAuth0();
 
   useEffect(() => {
     let cancelled = false;
@@ -25,6 +36,33 @@ export function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setRole(undefined);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = await getAccessTokenSilently();
+        const res = await fetch(`${API_BASE}/api/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) throw new Error(`/api/me responded ${res.status}`);
+        const body = (await res.json()) as { role?: unknown };
+        if (!cancelled && typeof body.role === "string") {
+          setRole(body.role);
+        }
+      } catch (err) {
+        // Per Sprint 1 scope: log only; don't surface to user.
+        console.error("[api/me] fetch failed:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, getAccessTokenSilently]);
 
   return (
     <main className="page">
@@ -80,6 +118,36 @@ export function App() {
           <p>
             <a href={CHANGELOG_URL}>Read the full changelog →</a>
           </p>
+          {!isLoading && (
+            <p className="auth-line">
+              {isAuthenticated ? (
+                <>
+                  Signed in as {user?.email}
+                  {role !== undefined ? ` (role: ${role})` : ""}
+                  {" · "}
+                  <button
+                    type="button"
+                    className="linklike"
+                    onClick={() =>
+                      logout({
+                        logoutParams: { returnTo: window.location.origin },
+                      })
+                    }
+                  >
+                    Sign out
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="linklike"
+                  onClick={() => loginWithRedirect()}
+                >
+                  Sign in
+                </button>
+              )}
+            </p>
+          )}
         </section>
 
         <section className="devs">
