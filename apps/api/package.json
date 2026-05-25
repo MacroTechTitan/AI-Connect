@@ -17,6 +17,7 @@
     "drizzle-orm": "0.45.2",
     "express": "4.21.1",
     "express-rate-limit": "7.4.1",
+    "jose": "^6.2.3",
     "pg": "8.13.1",
     "pino": "9.5.0",
     "pino-http": "10.3.0",
