@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@ai-connect/shared": "workspace:*",
-    "drizzle-orm": "0.36.4",
+    "drizzle-orm": "0.45.2",
     "express": "4.21.1",
     "express-rate-limit": "7.4.1",
     "pg": "8.13.1",
