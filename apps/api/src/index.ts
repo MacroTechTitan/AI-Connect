@@ -3,6 +3,7 @@ import { env } from "./lib/env.js";
 import { logger } from "./lib/logger.js";
 import { seedAdmin } from "./lib/seed.js";
 import { registerAdminRoutes } from "./routes/admin.js";
+import { registerMeRoutes } from "./routes/me.js";
 
 const app = express();
 
@@ -38,6 +39,9 @@ app.get("/version", (_req, res) => {
 
 // /api/admin/diagnostics — bearer-token-gated, does not touch /health or /version.
 registerAdminRoutes(app);
+
+// /api/me — Auth0 JWT-gated, lazily creates the user row on first login.
+registerMeRoutes(app);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "not_found" });
