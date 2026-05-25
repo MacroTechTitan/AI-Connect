@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AI Connect is the unified orchestration layer for AI-assisted development — a chat surface that routes prompts to the right AI tool (Claude, Claude Code, Cursor, Perplexity, Ollama, OpenClaw, etc.) and enforces the MTTBuild methodology as platform behavior. The product is open-core (MIT framework + hosted SaaS at `aiconnect.macrotechtitan.com`).
 
-State at time of writing: Sprint 0 in flight, ~65% complete. The infrastructure half is live in production with valid SSL: `https://api.aiconnect.macrotechtitan.com/health` returns 200, `https://aiconnect.macrotechtitan.com` serves the placeholder landing page. Remaining Sprint 0 work: Drizzle schema for `users`/`systemLogs`/`userAuditLogs`/`devLogs`, `lib/logging.ts` wrapper exposing `logSystem`/`logUserAction`/`logDev`, idempotent admin seed for `jgelet@macrotechtitan.com`, admin diagnostics endpoint at `/api/admin/diagnostics` (bearer-token auth via `DIAGNOSTICS_TOKEN`), README amendment to reflect actual acceptance criteria, manual schema migration to Supabase, verification, then merge to master.
+State at time of writing: Sprint 0 shipped (merge commit 8cdafc1 to master) and Sprint 0.5 polish shipped. Sprint 1 in progress on branch sprint/1-auth — three commits done locally (JWT middleware, /api/me with lazy user creation, frontend Auth0 SDK). Production currently runs Sprint 0.5 from master; Sprint 1 ships to production once Commit 4 lands and the branch merges per the MTTBuild merge-and-ship ritual.
 
 The README (`README.md`) is treated as the project specification — when architecture changes, the README changes first. The Sprint 0 acceptance criteria live in README §9 and `SPRINT_0_HANDOFF.md`.
 
