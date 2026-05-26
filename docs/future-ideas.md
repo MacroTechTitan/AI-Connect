@@ -42,6 +42,35 @@ Both branches need the platform-choice step (see below).
 
 **Architectural implication now:** the `projects` table (Sprint 3-4 anchored concept) must be flexible enough to model both "AI Connect-provisioned project" (path A) and "external project I connect into" (path B). A connection is metadata about how AI Connect reaches the project, not what AI Connect owns.
 
+### Path B takeover — supported source platforms
+
+Path B's "take over an existing project" flow targets developers who used AI-builder or AI-assisted tools to move fast on a prototype, hit the "okay but it's a mess" wall, and want to turn the prototype into something production-grade with discipline going forward.
+
+This is one of AI Connect's most concentrated audiences by intent: they already use AI in development, they already feel methodology pain, they're already actively shopping for solutions.
+
+Path A and Path B are both core to the wizard. Neither is prioritized over the other — different users arrive with different starting points and both deserve a clean onboarding flow.
+
+**Primary supported source platforms** (validated through founder use, prioritized for first implementation):
+
+1. **Replit projects.** Replit projects often start fast, accumulate garbled code, partial features, and unclear deployment status. AI Connect takeover flow: clone the Replit, analyze the code, propose migration to AI Connect's stack (Vercel + Render + Supabase or equivalent), apply MTTBuild methodology going forward, rescue working features, audit-log every fix.
+
+2. **Lovable projects.** Lovable generates React frontends; users often have a working UI but no real backend or unclear deployment. AI Connect takeover: ingest the Lovable repo, add proper backend infrastructure, deploy cleanly, apply methodology.
+
+3. **Open Claw projects.** Same pattern, different source generator.
+
+4. **Generic GitHub repo.** Catch-all for projects from any source. Likely the eventual fallback once we understand what patterns repeat across specific platforms.
+
+**Honorable mentions** (not yet validated through founder use, deferred until either signal or validation):
+
+Bolt, v0, Cursor projects, Claude Artifacts, Cline, Aider, Continue, Codeium, and similar AI-assisted dev tools. Each is a potential source platform but none have been validated through firsthand use. Added to AI Connect as supported sources when signal emerges from users requesting them.
+
+**Architectural implications now:**
+
+- Project ingestion needs a clean abstraction. The core flow: "Take a repo URL, produce an AI Connect project record + analysis of what is there + migration plan."
+- The Sprint 4-5 `projects` table should accommodate `imported_from` metadata: source platform, original URL, ingestion date, original state at ingestion time.
+- Code-analysis tooling becomes a first-class capability. AI Connect must read code, identify framework, dependencies, deployment setup, and propose changes. This was implicit in MTTBuild already; takeover makes it explicit and core.
+- The migration step (e.g., Replit → AI Connect stack) is itself a methodology-enforced sprint. Sprint 0 of every takeover project = ingestion + analysis + plan. Sprint 1 = first deploy + audit baseline. This creates a natural revenue model: charge for the takeover engagement, then for ongoing usage.
+
 ### Platform support strategy (target: Sprint 5-6, ships with the wizard)
 
 The wizard's platform-choice step lets the user declare what they're building on:
