@@ -219,6 +219,14 @@ export function App() {
           <a href={CHANGELOG_URL}>Changelog</a>
         </section>
 
+        <section className="logo-block">
+          <img
+            src="https://blog.macrotechtitan.com/wp-content/uploads/2026/05/MTT-AI-Connect-1-300x300.png"
+            alt="AI Connect logo"
+            className="logo"
+          />
+        </section>
+
         <footer className="footer">
           <p>
             Built by{" "}
