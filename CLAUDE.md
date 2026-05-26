@@ -113,13 +113,25 @@ DNS — Cloudflare zone `macrotechtitan.com`
 This project is built using the methodology it enforces. Before any non-trivial change, read `docs/MTTBuild.md` end-to-end. The points that bite hardest in practice:
 
 - **Branch from `master`, not `main`.** Default branch is `master` by MTTBuild convention.
-- **No direct commits to `master`.** Hotfixes are sprints too — branch, PR, review. The only exception is reverting a broken deploy.
+- **No direct commits to `master`** except in narrowly-defined cases — see [Direct-to-master commit rules](#direct-to-master-commit-rules) below.
 - **One active feature branch at a time per project.** Don't start a new sprint with the previous one unmerged.
 - **`git pull origin master` before starting work, and `git merge origin/master` into the feature branch before opening the PR.** This resolves conflicts while context is fresh.
 - **Tight scope per sprint.** PRs touching >10 files trigger a "split this" review comment.
 - **Schema migrations never auto-apply.** Generate → commit → review → manually apply with verification queries → then merge the code that uses the new schema. Never the other order.
 - **Revert-first on production breaks.** Revert the merge, redeploy green, *then* branch and fix forward.
 - **No platform-specific dependencies without graceful degradation.** Anything referencing Replit-specific env vars (`REPL_*`, `DYNO`) needs a `process.env` fallback.
+
+### Direct-to-master commit rules
+
+**Direct-to-master commits are permitted only in these scenarios:**
+1. Reverting a broken deploy (revert-first per MTTBuild §1.2)
+2. Production hotfixes for breaking issues introduced by an already-merged sprint that cannot wait for a new sprint branch + PR + merge cycle (e.g., misconfiguration discovered immediately post-merge, runtime errors only surfacing in production, security fixes for vulnerabilities in dependencies)
+3. Docs-only commits when the sprint they belong to has already merged and the docs are completing the sprint's documentation cycle (SPRINT_LOG entries, smoke test results, future-ideas captures from sprint retrospectives)
+
+All other code changes must go through a sprint branch + PR + merge cycle.
+
+Recent direct-to-master commits that match these scenarios are recorded in `docs/sprints/SPRINT_LOG.md`:
+- Sprint 1: db341ee (CORS hotfix), be1dd2c (Auth0 namespaced email claim hotfix), 2361d92 (Sprint 1 log entry), b065093 + d2619a0 (future-ideas captures from Sprint 1 retrospective)
 
 Deviations from MTTBuild defaults must be recorded in `docs/PROJECT_TEMPLATE_OVERRIDES.md` with reason, date, and sprint. The defaults apply (Drizzle, Render+Vercel, Supabase, Auth0 shared tenant `macrotechtitandev.us.auth0.com`, Stripe shared customer pool, pnpm). Two AI-Connect-specific architectural commitments extend MTTBuild rather than override it: (1) MCP-per-service for external integrations (Sprint 6+ implementation, decision made Sprint 0), (2) admin diagnostics endpoint with bearer-token auth (`/api/admin/diagnostics`, implemented Sprint 0). These belong in `docs/PROJECT_TEMPLATE_OVERRIDES.md` as architectural commitments — a follow-up commit will add them there.
 
