@@ -26,6 +26,67 @@ Two flavors: static (user-configured rules per task type) and dynamic (platform 
 
 **Architectural implication now:** Sprint 2's BYOAI abstraction captures cost-per-call (tokens × provider rate) as first-class data on every AI call. Retrofitting cost tracking is expensive.
 
+## Anchored concepts: distribution channels
+
+These concepts shape AI Connect's distribution and onboarding strategy. Implementation comes later but architectural implications start now.
+
+### Signup wizard with A/B flow (target: Sprint 5-6)
+
+First-touch UX for a new user. Two branches:
+
+**A. Start a new dev project.** AI Connect provisions the project from scratch — Vercel + Render + Supabase + Auth0 + DNS + monorepo scaffold + working /health endpoint. This is the user-facing manifestation of the Project Genesis concept (already documented above).
+
+**B. Take over an existing project.** AI Connect connects to infrastructure the user already has. Different problem from A: discovery, introspection, mapping their existing setup into AI Connect's project data model. Likely higher-value in the near term because it has no chicken-and-egg problem — existing developers with existing projects are the natural first users.
+
+Both branches need the platform-choice step (see below).
+
+**Architectural implication now:** the `projects` table (Sprint 3-4 anchored concept) must be flexible enough to model both "AI Connect-provisioned project" (path A) and "external project I connect into" (path B). A connection is metadata about how AI Connect reaches the project, not what AI Connect owns.
+
+### Platform support strategy (target: Sprint 5-6, ships with the wizard)
+
+The wizard's platform-choice step lets the user declare what they're building on:
+
+1. **Custom build** (Vercel + Render + Supabase, the AI Connect template — Path A's default)
+2. **WordPress** (existing or new WP site, via the AI Connect WordPress Plugin — see below)
+3. **Other CMS/framework** (placeholder for future support; not in initial scope)
+
+WordPress is the second platform AI Connect commits to formally because it has the largest installed base of solo-developer-managed sites worldwide and the lowest auth/infra friction compared to bespoke setups. It's another channel into AI Connect's actual audience: developers and small teams.
+
+Joomla, Drupal, Ghost, Webflow, and similar are explicitly out of initial scope. Not because they don't matter, but because the WordPress plugin pattern should be validated before extending to other CMSes.
+
+### WordPress plugin channel (target: Sprint 10-12, with architectural implications starting Sprint 4-5)
+
+**AI Connect for WordPress** — a plugin published to the WordPress plugin directory that gives developers a controlled bridge between AI Connect and any WordPress site they're building or maintaining.
+
+**Audience:** solo developers, freelancers, and small agencies who build WordPress sites for clients. Estimated 200-500K worldwide. Not WordPress end-users; the developers who own and maintain WordPress sites professionally.
+
+**Positioning:** "We build the rails, devs build the apps." The plugin is a connector and bridge, not a productized AI feature. AI Connect provides the infrastructure and APIs; developers compose them into whatever they need for their sites and clients.
+
+**First-shipping capabilities:**
+- Authenticated bridge: developer connects their AI Connect account to a WP site they manage. OAuth-style flow initiated from WP admin.
+- Read and write WordPress content (posts, pages, custom post types) via WordPress REST API, proxied through AI Connect's connector layer.
+- AI chat widget embeddable on the WP site, configurable in WP admin, scoped to topics the developer defines.
+- Automated content creation routed through the developer's configured AI providers.
+- Social media posting and content scheduling, executed by AI Connect's scheduling system.
+- Extension points for developers to build custom AI features on top of the connector layer (see SDK note below).
+
+**Strategic decision: AI Connect SDK and app marketplace (target: Sprint 15-18)**
+
+Long-term direction is real, not metaphorical. AI Connect will eventually have:
+- An SDK for developers to build their own AI Connect apps on top of the connector layer
+- A marketplace where those apps can be listed and discovered (similar to Slack apps, Zapier apps, Notion blocks)
+- A revenue share model for marketplace authors
+
+This commits AI Connect to a platform-for-platforms architecture. Not implemented out of the gate — the SDK ships when there is enough user demand and platform usage to justify it (likely Sprint 15-18). However, Sprint 6-10 architecture decisions should anticipate this future: the connector layer needs an extensible interface, audit logging needs app-scoped attribution, cost-aware AI routing needs per-app cost tracking.
+
+**Revenue model for WordPress plugin users:** deferred to when first paying user signs up. Initial direction is free + paid features (basic capabilities free, advanced capabilities paid). The exact pricing — per-site, per-seat, metered usage, or freemium with tiered features — gets decided based on what early users actually want to pay for. Whatever is easiest at the time, validated against signal.
+
+**Architectural implications now:**
+- Sprint 4-5 multi-project portfolio model must scale to the "developer with 30 client WP sites" use case. The `projects` table needs to handle dozens of connections per organization without performance issues.
+- Sprint 6 connector layer architecture should anticipate a WordPress plugin as the first non-AI connector. Pattern: AI Connect orchestrates → external system (WordPress site, eventually Drupal, Ghost, etc.).
+- Sprint 6-10 should design APIs with the future SDK in mind, even if the SDK itself isn't built yet. Specifically: every API surface that the WP plugin uses internally should be conceptualized as "what would a third-party dev's app also need to use this for?"
+- Authentication for the WP plugin must work cleanly alongside Auth0 (the WP site's plugin doesn't go through Auth0 — it presents an AI-Connect-issued API key or OAuth token that the developer obtains from their AI Connect account).
+
 ## Unsorted ideas
 
 These don't have architectural implications today. They're parked here for future sprint planning.
@@ -57,4 +118,4 @@ These don't have architectural implications today. They're parked here for futur
 
 ---
 
-*Last updated: 2026-05-25*
+*Last updated: 2026-05-26*
