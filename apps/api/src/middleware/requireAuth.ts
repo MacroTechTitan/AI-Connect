@@ -82,10 +82,19 @@ export async function requireAuth(
     return;
   }
 
-  const email =
-    typeof payload.email === "string" && payload.email.length > 0
-      ? payload.email
-      : undefined;
+  // Auth0 access tokens don't include the bare `email` claim by default —
+  // it lives on ID tokens. The Post Login Auth0 Action adds a namespaced
+  // custom claim (https://aiconnect.macrotechtitan.com/email) onto access
+  // tokens. We read that first; the bare `email` is a fallback in case
+  // future SDK config starts attaching it directly. If neither is present
+  // /api/me will return 400 "email claim missing" as documented.
+  const emailSources = [
+    payload["https://aiconnect.macrotechtitan.com/email"],
+    payload.email,
+  ];
+  const email = emailSources.find(
+    (v): v is string => typeof v === "string" && v.length > 0,
+  );
 
   req.user = { sub: payload.sub, email };
   next();
