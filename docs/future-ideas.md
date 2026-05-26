@@ -116,6 +116,53 @@ This commits AI Connect to a platform-for-platforms architecture. Not implemente
 - Sprint 6-10 should design APIs with the future SDK in mind, even if the SDK itself isn't built yet. Specifically: every API surface that the WP plugin uses internally should be conceptualized as "what would a third-party dev's app also need to use this for?"
 - Authentication for the WP plugin must work cleanly alongside Auth0 (the WP site's plugin doesn't go through Auth0 — it presents an AI-Connect-issued API key or OAuth token that the developer obtains from their AI Connect account).
 
+### Project memory layer (target: Sprint 5-6 expansion of takeover flow)
+
+The takeover flow (Path B of the signup wizard) ingests source code from Replit, Lovable, GitHub, and similar sources. The next layer is **project memory** — beyond just code, AI Connect ingests every artifact relevant to a project so users can resume work after long gaps without remembering context.
+
+Ingested artifact types:
+- Code (repo contents, already in takeover scope)
+- Documents (Word docs, PDFs, markdown, plain text notes)
+- Configuration (env vars, deployment configs, infrastructure descriptions)
+- Connection metadata (which Supabase project, Render service, Stripe account, Auth0 tenant)
+- External context (Notion pages, Google Docs URLs, Slack threads, email exports)
+- History (old chat exports, screenshots, voice memos)
+
+AI Connect's value-add: synthesizing across these artifacts. When a user returns to a project after weeks or months, AI Connect should be able to answer questions like "what was I working on last?", "what's the current state of the Render deploy?", "was there an outstanding bug I noted somewhere?", "what did I tell my client we'd ship next?", "did I ever decide between approach A and approach B?"
+
+Architecture: standard RAG pattern (object storage for files, vector embeddings for content, metadata index for filtering, synthesis layer via AI Connect's existing AI routing).
+
+Why it matters: developers and teams with multiple active projects struggle to maintain context across them. A solo developer juggling several projects, an agency managing client work, a small team running multiple products — all face the same problem of "what was I doing on project X six weeks ago?" AI Connect's project memory turns scattered artifacts into queryable context, so projects that haven't been touched recently can be picked up without the mental tax of reconstructing where things stood. Methodology discipline depends on this — without continuous context, methodology gets skipped because users skip the steps they can't remember why they set up.
+
+Architectural implications now:
+- Object storage choice for files: Cloudflare R2 preferred (S3-compatible, no AWS lock-in, generous free tier).
+- The `projects` table from Sprint 3-4 must accommodate file attachments — either a `project_files` join table or a separate `artifacts` table tied to projects.
+- Vector storage choice: defer until Sprint 5-6 when actual volume is known. Initial pattern: pgvector extension on Supabase Postgres (no separate vector DB needed, fits the self-hosting story).
+
+### Scope of Work template + 20-question wizard (target: Sprint 4-5, part of signup wizard)
+
+Every AI Connect project starts with a SOW.md (Scope of Work) document. Two ways to fill it in:
+
+**A. Static template.** User fills in a structured markdown file with sections like project pitch, target audience, success criteria, out-of-scope, architecture, risks, dependencies, initial sprint structure. Auto-generated stub when a project is created.
+
+**B. 20-question wizard.** AI Connect walks the user through structured questions. The answers assemble the SOW.md plus initial README.md plus initial task list (broken into Sprint 0/1/2 scope) plus a risk register.
+
+Why this matters: half of dev-project failures come from skipping the question "what is this for and why?" at the start. AI Connect making this discipline the default — and integrating the SOW with methodology enforcement — turns a generic template into a real methodology product. A strong foundation document at the start saves rework, conflict, and scope creep throughout the entire project lifecycle.
+
+The wizard's questions cover, in rough order: project name, one-sentence pitch, target user, problem solved, success metric, MVP scope, out-of-scope, budget/timeline, stack preference, integrations needed, deployment model (self-hosted vs cloud vs either), multi-tenancy, data sensitivity, stakeholders, risk of failure, level of investment, prior similar projects, existing competitors to learn from, definition of done.
+
+Integration with existing AI Connect features:
+- The SOW becomes part of the project memory layer (ingested and retrievable)
+- The out-of-scope list gets enforced by methodology — if Claude Code starts building something declared out of scope, AI Connect warns the user
+- Audit log connects every commit to which SOW section it serves
+- The task list becomes a real backlog with priorities and dependencies tracked across sprints
+
+Equally applicable to both wizard paths:
+- Path A (new project): SOW filled in before any infrastructure is provisioned
+- Path B (takeover): user fills in SOW about the existing project. Useful for documenting what was intended even if the project's original SOW was never written. Especially valuable for AI-builder projects (Replit/Lovable/Open Claw) that typically have no documentation.
+
+Both individuals and teams benefit. A solo developer using SOW discipline avoids the chronic "what was I trying to build" drift that derails personal projects. A team using SOW discipline gets shared alignment on scope, priorities, and exclusion boundaries before code is written — which is where most team conflict on projects actually originates.
+
 ## Unsorted ideas
 
 These don't have architectural implications today. They're parked here for future sprint planning.
