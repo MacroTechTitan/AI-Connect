@@ -4,6 +4,7 @@ import { env } from "./lib/env.js";
 import { logger } from "./lib/logger.js";
 import { seedAdmin } from "./lib/seed.js";
 import { registerAdminRoutes } from "./routes/admin.js";
+import { registerKeysRoutes } from "./routes/keys.js";
 import { registerMeRoutes } from "./routes/me.js";
 
 const app = express();
@@ -62,6 +63,9 @@ registerAdminRoutes(app);
 
 // /api/me — Auth0 JWT-gated, lazily creates the user row on first login.
 registerMeRoutes(app);
+
+// /api/keys — Auth0 JWT-gated provider-key CRUD; secrets live in Supabase Vault.
+registerKeysRoutes(app);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "not_found" });
