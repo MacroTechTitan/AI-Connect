@@ -98,6 +98,40 @@ Auth0 wiring + first authenticated route + minimal user dashboard. Dependabot ha
 ### Sprint 2 starting point
 BYOAI provider abstraction: connect-your-own-AI-key flow, capture per-call cost (tokens × provider rate) as first-class data, support Claude + OpenAI + Ollama as first three providers. Per Sprint 0.5 architectural commitment (cost-aware AI routing).
 
+## Sprint 2 — BYOAI provider abstraction (2026-06-02)
+- Branch: sprint/2-byoai (merged) plus direct-to-master Sprint 2.5 production fixes
+- Merged to master: 2026-06-02 as PR #6 merge commit
+- Production hotfix on master: refreshed provider_pricing seed with current model IDs (Anthropic 2024 models had been deprecated by mid-2026)
+- Production verified: 2026-06-02 — end-to-end smoke test passed: signed in, added Anthropic key, sent prompt, received response from claude-sonnet-4-6 with cost ($0.0003) and latency (~2s) populated correctly.
+
+### What shipped
+- Three new tables: provider_keys (vault_secret_id reference), provider_pricing (static rate table), prompts (every AI invocation logged with fingerprints + cost + latency).
+- Provider abstraction layer with three implementations (Anthropic Messages API, OpenAI Chat Completions, Ollama generate). Pure fetch, no SDK dependencies, AbortController timeouts, latency via performance.now().
+- POST/GET/DELETE /api/keys protected by requireAuth. Provider API keys encrypted at rest via Supabase Vault; DB holds vault_secret_id reference plus user-friendly metadata only.
+- POST /api/prompt — resolves key + model, decrypts via Vault, calls provider, computes cost from tokens × pricing, logs the invocation, returns response. DB writes happen AFTER the provider call to avoid holding transactions during 30+ second network calls.
+- Frontend settings panel accessible after login. Add/list/remove keys, test a prompt, see response + provider + model + tokens + cost + latency. Toggle visibility from the status block. Bundle: 337.75 KB raw / 105.43 KB gzipped.
+- 9 pricing rows seeded (3 Anthropic, 3 OpenAI, 3 Ollama). Each provider has exactly one is_default = true row.
+- 18-step smoke test procedure in docs/sprints/SPRINT_2_TESTING.md.
+
+### Lessons learned
+- Supabase auto-enables RLS on new tables in the public schema EVEN WHEN the migration explicitly disables it inline. The DISABLE ROW LEVEL SECURITY statements in the migration ran before Supabase's auto-enable hook completed. Workaround: run the same disable statements again manually after applying the migration. Going forward: every new-table migration needs a follow-up manual RLS-off step, OR project-level config to disable the auto-enable behavior.
+- AI provider model IDs deprecate faster than expected. The Sprint 0.5 architectural commitment for cost-aware AI routing called for a static pricing table; this works for Sprint 2 but creates a maintenance hazard. Model IDs in the table must match exactly what each vendor accepts at the API today. Stale IDs return 404 with no useful error from the provider's perspective (the user sees a generic provider_error 502). Mitigation: add a CLAUDE.md or docs/ note about checking each vendor's deprecation page when refreshing the seed, AND consider Sprint 6's cost-aware routing including a "validate model is alive" check on key add.
+- Supabase Vault works clean for storing user secrets. vault.create_secret + vault.decrypted_secrets gives us encrypted-at-rest with a simple read path; no separate KMS service to manage, no AWS lock-in, fits the self-hosting story we committed to in Sprint 0.5. The wrapper at apps/api/src/lib/vault.ts isolates the Vault-specific calls so swapping to AWS KMS or HashiCorp Vault later is one file change.
+- "Never display API keys back" is the right default. Sprint 2's UI explicitly hides key values after entry — only label + provider + default badge appear in the list. Security side benefit beyond just hiding from shoulder-surfers: prevents leak via screenshot tooling, accessibility readers, browser extensions.
+- The discriminated union pattern for ProviderInvocationResult (success vs error variant) makes the calling code's branching obvious and prevents the "did this call succeed?" guessing game that plagues fetch-based code. Worth keeping as a pattern for future external-API integrations (Stripe, Cloudflare, etc. in later sprints).
+
+### Deferred to Sprint 2.5 / housekeeping
+- A "validate key on add" feature: when a user adds a provider key, fire a tiny test call (e.g., 1-token completion) to confirm the key works AND the chosen default model is currently routable at the upstream API. Catches deprecated-model errors at key-add time instead of at first-prompt time.
+- Streaming responses (deferred to whichever sprint adds conversational UI).
+- Multi-tenant org-scoped key sharing (Sprint 3-4 multi-tenant work).
+- Per-task cost routing rules (Sprint 6 — the cost-aware AI routing anchored concept).
+- Token estimation BEFORE sending the prompt (cost preview UX). Currently we only learn token count from the provider's response — there's no way to warn "this will cost ~$0.20" before the user clicks Send.
+- Add a TESTING.md note: when re-applying the pricing seed, validate the listed model IDs against each vendor's current docs first.
+- Bundle size 337.75 KB raw — still within acceptable range but the Auth0 SDK + settings UI together are noticeable. Code-splitting research before Sprint 4 adds Project Genesis UI.
+
+### Sprint 3 starting point
+Multi-tenant data model: organizations table, projects table, users → organizations relationship, org-level isolation enforced at query layer. Per Sprint 0.5 architectural commitment ("organizations → projects → users → audit logs, AI usage" — not flat). Sprint 3 also includes refactoring provider_keys to be optionally org-scoped (so an organization can share an API key across users) — but only if Sprint 3 stays tight; otherwise that goes to Sprint 3.5.
+
 ---
 
-*Last updated: 2026-05-26*
+*Last updated: 2026-06-02*
