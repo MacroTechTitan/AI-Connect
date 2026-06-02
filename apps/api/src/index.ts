@@ -6,6 +6,7 @@ import { seedAdmin } from "./lib/seed.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerKeysRoutes } from "./routes/keys.js";
 import { registerMeRoutes } from "./routes/me.js";
+import { registerPromptRoutes } from "./routes/prompt.js";
 
 const app = express();
 
@@ -66,6 +67,10 @@ registerMeRoutes(app);
 
 // /api/keys — Auth0 JWT-gated provider-key CRUD; secrets live in Supabase Vault.
 registerKeysRoutes(app);
+
+// /api/prompt — Auth0 JWT-gated; routes prompts to the user's provider key
+// and logs every invocation with cost, tokens, and latency.
+registerPromptRoutes(app);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "not_found" });
