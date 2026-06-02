@@ -6,6 +6,7 @@ import { seedAdmin } from "./lib/seed.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerKeysRoutes } from "./routes/keys.js";
 import { registerMeRoutes } from "./routes/me.js";
+import { registerProjectsRoutes } from "./routes/projects.js";
 import { registerPromptRoutes } from "./routes/prompt.js";
 
 const app = express();
@@ -71,6 +72,9 @@ registerKeysRoutes(app);
 // /api/prompt — Auth0 JWT-gated; routes prompts to the user's provider key
 // and logs every invocation with cost, tokens, and latency.
 registerPromptRoutes(app);
+
+// /api/projects — Auth0 JWT-gated CRUD for org-scoped projects.
+registerProjectsRoutes(app);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "not_found" });
