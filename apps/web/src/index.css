@@ -128,6 +128,152 @@ html, body, #root { margin: 0; min-height: 100vh; }
   opacity: 0.9;
 }
 
+.settings-block {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.5rem;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+.settings-block h2 {
+  font-size: 1.1rem;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+.settings-block h3 {
+  font-size: 0.95rem;
+  margin: 0 0 0.5rem;
+  letter-spacing: -0.01em;
+  opacity: 0.85;
+}
+.settings-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.settings-block .muted {
+  opacity: 0.6;
+  font-size: 0.85rem;
+  margin: 0;
+}
+.settings-block .error {
+  color: #f87171;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.keys-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.key-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.35rem;
+  font-size: 0.9rem;
+}
+.key-row .key-meta {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: baseline;
+}
+.key-row .key-provider { font-weight: 600; }
+.key-row .key-label { opacity: 0.8; }
+.key-row .default-badge {
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  color: #4ade80;
+  border-radius: 0.3rem;
+}
+
+.add-key-form,
+.test-prompt-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.add-key-form .row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.add-key-form select,
+.add-key-form input,
+.test-prompt-form textarea {
+  background: #15171c;
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.35rem;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  font-size: 0.9rem;
+}
+.add-key-form select { min-width: 8rem; }
+.add-key-form .label-input { flex: 1; min-width: 12rem; }
+.add-key-form .key-input { flex: 2; min-width: 16rem; }
+.test-prompt-form textarea {
+  width: 100%;
+  min-height: 5rem;
+  resize: vertical;
+}
+
+.btn-primary {
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 0.35rem;
+  padding: 0.45rem 0.9rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  align-self: flex-start;
+}
+.btn-primary:hover { background: rgba(255, 255, 255, 0.1); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-danger {
+  background: none;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  color: #f87171;
+  border-radius: 0.3rem;
+  padding: 0.3rem 0.6rem;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.btn-danger:hover { background: rgba(248, 113, 113, 0.08); }
+
+.prompt-result {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.35rem;
+  padding: 0.75rem 0.9rem;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.prompt-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  font-size: 0.8rem;
+  opacity: 0.7;
+  margin-top: 0.5rem;
+}
+
 .footer {
   text-align: center;
   font-size: 0.8rem;
