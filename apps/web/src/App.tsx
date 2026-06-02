@@ -1,16 +1,414 @@
 import { useAuth0 } from "@auth0/auth0-react";
-import { useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type FormEvent,
+} from "react";
 
 type HealthStatus = "pending" | "ok" | "down";
+type Provider = "anthropic" | "openai" | "ollama";
 
 const HEALTH_URL = "https://api.aiconnect.macrotechtitan.com/health";
 const API_BASE = import.meta.env.VITE_API_BASE_URL;
 const CHANGELOG_URL =
   "https://github.com/MacroTechTitan/AI-Connect/blob/master/CHANGELOG.md";
 
+const PROVIDER_LABEL: Record<Provider, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  ollama: "Ollama",
+};
+
+const KEY_PLACEHOLDER: Record<Provider, string> = {
+  anthropic: "sk-ant-...",
+  openai: "sk-...",
+  ollama: "http://localhost:11434",
+};
+
+type GetAccessToken = (opts?: { cacheMode?: "off" }) => Promise<string>;
+
+// Single retry on 401: forces a token refresh in case the cached access token
+// has expired or its audience/scope drifted.
+async function authedFetch(
+  path: string,
+  init: RequestInit,
+  getAccessTokenSilently: GetAccessToken,
+): Promise<Response> {
+  const send = async (forceRefresh: boolean): Promise<Response> => {
+    const token = await getAccessTokenSilently(
+      forceRefresh ? { cacheMode: "off" } : undefined,
+    );
+    return fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers: {
+        ...(init.headers ?? {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  };
+  const res = await send(false);
+  if (res.status === 401) return send(true);
+  return res;
+}
+
+function formatCost(cost: number | null | undefined): string {
+  if (cost === null || cost === undefined) return "—";
+  return `$${cost.toFixed(4)}`;
+}
+
+interface KeyRow {
+  id: string;
+  provider: Provider;
+  label: string;
+  is_default: boolean;
+  created_at: string;
+  last_used_at: string | null;
+  last_validated_at: string | null;
+}
+
+function KeysPanel({
+  getAccessTokenSilently,
+}: {
+  getAccessTokenSilently: GetAccessToken;
+}) {
+  const [keys, setKeys] = useState<KeyRow[] | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+
+  const [addProvider, setAddProvider] = useState<Provider>("anthropic");
+  const [addLabel, setAddLabel] = useState("");
+  const [addKey, setAddKey] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setListError(null);
+    setKeys(null);
+    try {
+      const res = await authedFetch(
+        "/api/keys",
+        {},
+        getAccessTokenSilently,
+      );
+      if (!res.ok) {
+        setListError(
+          res.status >= 500
+            ? "Something went wrong on our end. Try again in a moment."
+            : "Couldn't load keys.",
+        );
+        setKeys([]);
+        return;
+      }
+      const body = (await res.json()) as { keys?: KeyRow[] };
+      setKeys(body.keys ?? []);
+    } catch {
+      setListError("Couldn't reach the server. Try again.");
+      setKeys([]);
+    }
+  }, [getAccessTokenSilently]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function handleAdd(e: FormEvent) {
+    e.preventDefault();
+    setAddError(null);
+    setAdding(true);
+    try {
+      const res = await authedFetch(
+        "/api/keys",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: addProvider,
+            label: addLabel,
+            key: addKey,
+          }),
+        },
+        getAccessTokenSilently,
+      );
+      if (!res.ok) {
+        let msg =
+          res.status >= 500
+            ? "Something went wrong on our end. Try again in a moment."
+            : "Please check your input.";
+        try {
+          const body = (await res.json()) as {
+            reason?: string;
+            error?: string;
+          };
+          if (body?.reason) msg = body.reason;
+          else if (body?.error) msg = body.error;
+        } catch {
+          // body wasn't JSON; keep the status-derived message
+        }
+        setAddError(msg);
+        return;
+      }
+      setAddLabel("");
+      setAddKey("");
+      await refresh();
+    } catch {
+      setAddError("Couldn't reach the server. Try again.");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    try {
+      const res = await authedFetch(
+        `/api/keys/${id}`,
+        { method: "DELETE" },
+        getAccessTokenSilently,
+      );
+      if (!res.ok) {
+        setListError(
+          res.status >= 500
+            ? "Something went wrong on our end. Try again in a moment."
+            : "Couldn't delete that key.",
+        );
+        return;
+      }
+      await refresh();
+    } catch {
+      setListError("Couldn't reach the server. Try again.");
+    }
+  }
+
+  return (
+    <div className="settings-subsection">
+      <h3>Provider keys</h3>
+      {keys === null && !listError ? (
+        <p className="muted">Loading…</p>
+      ) : null}
+      {listError ? <p className="error">{listError}</p> : null}
+      {keys && keys.length === 0 && !listError ? (
+        <p className="muted">No keys yet. Add one below.</p>
+      ) : null}
+      {keys && keys.length > 0 ? (
+        <ul className="keys-list">
+          {keys.map((k) => (
+            <li key={k.id} className="key-row">
+              <span className="key-meta">
+                <span className="key-provider">
+                  {PROVIDER_LABEL[k.provider]}
+                </span>
+                <span className="key-label">{k.label}</span>
+                {k.is_default ? (
+                  <span className="default-badge">default</span>
+                ) : null}
+              </span>
+              <button
+                type="button"
+                className="btn-danger"
+                onClick={() => void handleDelete(k.id)}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      <form className="add-key-form" onSubmit={(e) => void handleAdd(e)}>
+        <div className="row">
+          <select
+            value={addProvider}
+            onChange={(e) => setAddProvider(e.target.value as Provider)}
+          >
+            <option value="anthropic">Anthropic</option>
+            <option value="openai">OpenAI</option>
+            <option value="ollama">Ollama</option>
+          </select>
+          <input
+            className="label-input"
+            type="text"
+            placeholder="e.g. My personal Claude key"
+            value={addLabel}
+            onChange={(e) => setAddLabel(e.target.value)}
+            maxLength={100}
+            required
+          />
+          <input
+            className="key-input"
+            type="password"
+            placeholder={KEY_PLACEHOLDER[addProvider]}
+            value={addKey}
+            onChange={(e) => setAddKey(e.target.value)}
+            required
+          />
+        </div>
+        <button type="submit" className="btn-primary" disabled={adding}>
+          {adding ? "Adding…" : "Add key"}
+        </button>
+        {addError ? <p className="error">{addError}</p> : null}
+      </form>
+    </div>
+  );
+}
+
+interface PromptSuccess {
+  response: string;
+  model: string;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  estimatedCostUsd: number | null;
+  latencyMs: number;
+}
+
+interface PromptErrorBlock {
+  message: string;
+  errorCode: string | null;
+  latencyMs: number | null;
+}
+
+function PromptTester({
+  getAccessTokenSilently,
+}: {
+  getAccessTokenSilently: GetAccessToken;
+}) {
+  const [prompt, setPrompt] = useState("");
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState<PromptSuccess | null>(null);
+  const [errorBlock, setErrorBlock] = useState<PromptErrorBlock | null>(null);
+
+  async function handleSend(e: FormEvent) {
+    e.preventDefault();
+    setResult(null);
+    setErrorBlock(null);
+    setSending(true);
+    try {
+      const res = await authedFetch(
+        "/api/prompt",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt }),
+        },
+        getAccessTokenSilently,
+      );
+      const body = (await res.json().catch(() => null)) as
+        | (Partial<PromptSuccess> & {
+            error?: string;
+            providerErrorCode?: string;
+            providerErrorMessage?: string;
+            reason?: string;
+            latencyMs?: number;
+          })
+        | null;
+
+      if (res.ok && body && typeof body.response === "string") {
+        setResult({
+          response: body.response,
+          model: body.model ?? "",
+          inputTokens: body.inputTokens ?? null,
+          outputTokens: body.outputTokens ?? null,
+          estimatedCostUsd: body.estimatedCostUsd ?? null,
+          latencyMs: body.latencyMs ?? 0,
+        });
+        return;
+      }
+
+      if (res.status === 400 && body?.error === "no_provider_key") {
+        setErrorBlock({
+          message: "Add a provider key first.",
+          errorCode: null,
+          latencyMs: null,
+        });
+        return;
+      }
+
+      if (res.status === 502 && body?.error === "provider_error") {
+        setErrorBlock({
+          message:
+            body.providerErrorMessage ??
+            body.providerErrorCode ??
+            "Provider error.",
+          errorCode: body.providerErrorCode ?? null,
+          latencyMs: body.latencyMs ?? null,
+        });
+        return;
+      }
+
+      if (res.status >= 500) {
+        setErrorBlock({
+          message: "Something went wrong on our end. Try again in a moment.",
+          errorCode: null,
+          latencyMs: null,
+        });
+        return;
+      }
+
+      setErrorBlock({
+        message:
+          body?.reason ?? body?.error ?? "Please check your input.",
+        errorCode: null,
+        latencyMs: null,
+      });
+    } catch {
+      setErrorBlock({
+        message: "Couldn't reach the server. Try again.",
+        errorCode: null,
+        latencyMs: null,
+      });
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="settings-subsection">
+      <h3>Test a prompt</h3>
+      <form className="test-prompt-form" onSubmit={(e) => void handleSend(e)}>
+        <textarea
+          placeholder="Type a prompt and we'll route it to your default provider key."
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          required
+          maxLength={100_000}
+        />
+        <button type="submit" className="btn-primary" disabled={sending}>
+          {sending ? "Sending…" : "Send"}
+        </button>
+      </form>
+      {result ? (
+        <div>
+          <div className="prompt-result">{result.response}</div>
+          <div className="prompt-meta">
+            <span>model: {result.model || "—"}</span>
+            <span>
+              tokens: {result.inputTokens ?? "—"} in /{" "}
+              {result.outputTokens ?? "—"} out
+            </span>
+            <span>cost: {formatCost(result.estimatedCostUsd)}</span>
+            <span>latency: {result.latencyMs} ms</span>
+          </div>
+        </div>
+      ) : null}
+      {errorBlock ? (
+        <div>
+          <p className="error">{errorBlock.message}</p>
+          <div className="prompt-meta">
+            {errorBlock.errorCode ? (
+              <span>code: {errorBlock.errorCode}</span>
+            ) : null}
+            {errorBlock.latencyMs !== null ? (
+              <span>latency: {errorBlock.latencyMs} ms</span>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function App() {
   const [health, setHealth] = useState<HealthStatus>("pending");
   const [role, setRole] = useState<string | undefined>(undefined);
+  const [showSettings, setShowSettings] = useState(false);
   const {
     isAuthenticated,
     isLoading,
@@ -40,6 +438,7 @@ export function App() {
   useEffect(() => {
     if (!isAuthenticated) {
       setRole(undefined);
+      setShowSettings(false);
       return;
     }
     let cancelled = false;
@@ -128,6 +527,14 @@ export function App() {
                   <button
                     type="button"
                     className="linklike"
+                    onClick={() => setShowSettings((v) => !v)}
+                  >
+                    {showSettings ? "Hide settings" : "Manage provider keys"}
+                  </button>
+                  {" · "}
+                  <button
+                    type="button"
+                    className="linklike"
                     onClick={() =>
                       logout({
                         logoutParams: { returnTo: window.location.origin },
@@ -149,6 +556,16 @@ export function App() {
             </p>
           )}
         </section>
+
+        {isAuthenticated && showSettings ? (
+          <section className="settings-block">
+            <h2>Settings</h2>
+            <KeysPanel getAccessTokenSilently={getAccessTokenSilently} />
+            <PromptTester
+              getAccessTokenSilently={getAccessTokenSilently}
+            />
+          </section>
+        ) : null}
 
         <section className="devs">
           <h2>For developers — what AI Connect actually does</h2>

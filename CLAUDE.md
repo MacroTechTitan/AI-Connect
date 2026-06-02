@@ -6,7 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AI Connect is the unified orchestration layer for AI-assisted development — a chat surface that routes prompts to the right AI tool (Claude, Claude Code, Cursor, Perplexity, Ollama, OpenClaw, etc.) and enforces the MTTBuild methodology as platform behavior. The product is open-core (MIT framework + hosted SaaS at `aiconnect.macrotechtitan.com`).
 
-State at time of writing: Sprint 0 shipped (merge commit 8cdafc1 to master) and Sprint 0.5 polish shipped. Sprint 1 in progress on branch sprint/1-auth — three commits done locally (JWT middleware, /api/me with lazy user creation, frontend Auth0 SDK). Production currently runs Sprint 0.5 from master; Sprint 1 ships to production once Commit 4 lands and the branch merges per the MTTBuild merge-and-ship ritual.
+State at time of writing:
+- Sprint 0 shipped (8cdafc1 merge to master, 2026-05-24) — Phase 0 infrastructure (API, web, schema, logging, admin diagnostics, secret handling).
+- Sprint 0.5 polish shipped (2026-05-24) — landing-page copy and visual cleanup.
+- Sprint 1 shipped (PR #5 merge 187f962, 2026-05-25) — Auth0 JWT middleware, `/api/me` with lazy user creation + audit log, frontend Auth0 SDK and `Signed in as …` UI.
+- Sprint 1.5 production hotfixes direct to master — CORS allowed-origins fix (db341ee) and Auth0 namespaced email claim fix (be1dd2c). Both qualified under the [Direct-to-master commit rules](#direct-to-master-commit-rules) and are logged in `docs/sprints/SPRINT_LOG.md`.
+- Sprint 2 in progress on branch sprint/2-byoai — six commits done locally: (1) schema migration adding `provider_keys`, `provider_pricing`, `prompts` tables; (2) provider abstraction layer with Anthropic, OpenAI, and Ollama clients behind a single `ProviderClient` interface; (3) `POST/GET/DELETE /api/keys` with Supabase Vault encryption for the raw secret value; (4) `POST /api/prompt` with cost tracking, token logging, latency, and SHA-256 fingerprints in lieu of stored prompt/response text; (5) inline frontend settings UI for managing keys and testing prompts; (6) this docs commit — pricing seed SQL + Sprint 2 smoke test + this status update.
+- Production currently runs Sprint 1.5 from master. Sprint 2 ships to production once this branch merges per the MTTBuild merge-and-ship ritual.
 
 The README (`README.md`) is treated as the project specification — when architecture changes, the README changes first. The Sprint 0 acceptance criteria live in README §9 and `SPRINT_0_HANDOFF.md`.
 
