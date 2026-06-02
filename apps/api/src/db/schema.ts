@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   boolean,
   check,
   index,
@@ -13,15 +14,82 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
-export const users = pgTable("users", {
-  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  email: text("email").notNull().unique(),
-  role: text("role").notNull().default("user"),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
-});
+export const users = pgTable(
+  "users",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    email: text("email").notNull().unique(),
+    role: text("role").notNull().default("user"),
+    organizationId: uuid("organization_id").references(
+      (): AnyPgColumn => organizations.id,
+      { onDelete: "set null" },
+    ),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+  },
+  (table) => ({
+    organizationIdIdx: index("idx_users_organization_id").on(
+      table.organizationId,
+    ),
+  }),
+);
+
+export const organizations = pgTable(
+  "organizations",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    name: text("name").notNull(),
+    slug: text("slug").notNull().unique(),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references((): AnyPgColumn => users.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    createdByIdx: index("idx_organizations_created_by").on(
+      table.createdByUserId,
+    ),
+  }),
+);
+
+export const projects = pgTable(
+  "projects",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    slug: text("slug").notNull(),
+    description: text("description"),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    organizationIdIdx: index("idx_projects_organization_id").on(
+      table.organizationId,
+    ),
+    createdByIdx: index("idx_projects_created_by").on(table.createdByUserId),
+    orgSlugUnique: unique("projects_organization_id_slug_unique").on(
+      table.organizationId,
+      table.slug,
+    ),
+  }),
+);
 
 export const systemLogs = pgTable(
   "system_logs",
@@ -32,6 +100,13 @@ export const systemLogs = pgTable(
     message: text("message").notNull(),
     context: jsonb("context"),
     traceId: uuid("trace_id"),
+    organizationId: uuid("organization_id").references(
+      () => organizations.id,
+      { onDelete: "set null" },
+    ),
+    projectId: uuid("project_id").references(() => projects.id, {
+      onDelete: "set null",
+    }),
     occurredAt: timestamp("occurred_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -52,6 +127,12 @@ export const systemLogs = pgTable(
       table.category,
       table.occurredAt,
     ),
+    organizationIdIdx: index("idx_system_logs_organization_id")
+      .on(table.organizationId)
+      .where(sql`${table.organizationId} IS NOT NULL`),
+    projectIdIdx: index("idx_system_logs_project_id")
+      .on(table.projectId)
+      .where(sql`${table.projectId} IS NOT NULL`),
   }),
 );
 
@@ -67,6 +148,13 @@ export const userAuditLogs = pgTable(
     targetId: text("target_id"),
     context: jsonb("context"),
     traceId: uuid("trace_id"),
+    organizationId: uuid("organization_id").references(
+      () => organizations.id,
+      { onDelete: "set null" },
+    ),
+    projectId: uuid("project_id").references(() => projects.id, {
+      onDelete: "set null",
+    }),
     occurredAt: timestamp("occurred_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -83,6 +171,12 @@ export const userAuditLogs = pgTable(
       table.action,
       table.occurredAt,
     ),
+    organizationIdIdx: index("idx_user_audit_logs_organization_id").on(
+      table.organizationId,
+    ),
+    projectIdIdx: index("idx_user_audit_logs_project_id")
+      .on(table.projectId)
+      .where(sql`${table.projectId} IS NOT NULL`),
   }),
 );
 
@@ -95,6 +189,13 @@ export const devLogs = pgTable(
     message: text("message").notNull(),
     context: jsonb("context"),
     traceId: uuid("trace_id"),
+    organizationId: uuid("organization_id").references(
+      () => organizations.id,
+      { onDelete: "set null" },
+    ),
+    projectId: uuid("project_id").references(() => projects.id, {
+      onDelete: "set null",
+    }),
     occurredAt: timestamp("occurred_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -111,6 +212,12 @@ export const devLogs = pgTable(
       table.category,
       table.occurredAt,
     ),
+    organizationIdIdx: index("idx_dev_logs_organization_id")
+      .on(table.organizationId)
+      .where(sql`${table.organizationId} IS NOT NULL`),
+    projectIdIdx: index("idx_dev_logs_project_id")
+      .on(table.projectId)
+      .where(sql`${table.projectId} IS NOT NULL`),
   }),
 );
 
@@ -121,6 +228,10 @@ export const providerKeys = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id").references(
+      () => organizations.id,
+      { onDelete: "set null" },
+    ),
     provider: text("provider").notNull(),
     label: text("label").notNull(),
     vaultSecretId: uuid("vault_secret_id").notNull(),
@@ -140,6 +251,9 @@ export const providerKeys = pgTable(
     userProviderIdx: index("idx_provider_keys_user_provider").on(
       table.userId,
       table.provider,
+    ),
+    organizationIdIdx: index("idx_provider_keys_organization_id").on(
+      table.organizationId,
     ),
   }),
 );
@@ -193,6 +307,13 @@ export const prompts = pgTable(
     providerKeyId: uuid("provider_key_id").references(() => providerKeys.id, {
       onDelete: "set null",
     }),
+    organizationId: uuid("organization_id").references(
+      () => organizations.id,
+      { onDelete: "set null" },
+    ),
+    projectId: uuid("project_id").references(() => projects.id, {
+      onDelete: "set null",
+    }),
     provider: text("provider").notNull(),
     model: text("model").notNull(),
     promptTextFingerprint: text("prompt_text_fingerprint").notNull(),
@@ -230,5 +351,11 @@ export const prompts = pgTable(
       table.userId,
       table.status,
     ),
+    organizationIdIdx: index("idx_prompts_organization_id").on(
+      table.organizationId,
+    ),
+    projectIdIdx: index("idx_prompts_project_id")
+      .on(table.projectId)
+      .where(sql`${table.projectId} IS NOT NULL`),
   }),
 );
