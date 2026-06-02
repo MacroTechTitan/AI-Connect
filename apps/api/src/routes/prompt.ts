@@ -8,16 +8,23 @@ import {
   prompts,
   providerKeys,
   providerPricing,
-  users,
 } from "../db/schema.js";
 import { logUserAction } from "../lib/logging.js";
+import {
+  assertOrgAccess,
+  orgScopeFilter,
+  type AuthedUserContext,
+} from "../lib/orgScope.js";
 import {
   getProviderClient,
   type Provider,
   type ProviderInvocationResult,
 } from "../lib/providers/index.js";
 import * as vault from "../lib/vault.js";
-import { requireAuth } from "../middleware/requireAuth.js";
+import {
+  requireAuth,
+  requireHydratedUser,
+} from "../middleware/requireAuth.js";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -33,30 +40,9 @@ function sha256Hex(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
-// Resolve authenticated user's row id. Writes the failure response on miss.
-async function resolveUserId(
-  req: Request,
-  res: Response,
-): Promise<string | null> {
-  const auth = req.user;
-  if (!auth) {
-    res.status(401).json({ error: "unauthorized", reason: "no_user_context" });
-    return null;
-  }
-  if (!auth.email) {
-    res.status(400).json({ error: "email claim missing" });
-    return null;
-  }
-  const [row] = await getDb()
-    .select({ id: users.id })
-    .from(users)
-    .where(eq(users.email, auth.email))
-    .limit(1);
-  if (!row) {
-    res.status(401).json({ error: "unauthorized", reason: "user_not_found" });
-    return null;
-  }
-  return row.id;
+// req.user is guaranteed by requireHydratedUser; this just narrows the type.
+function getCtx(req: Request): AuthedUserContext {
+  return req.user!;
 }
 
 interface PromptBody {
@@ -124,22 +110,25 @@ interface ResolvedKey {
 }
 
 async function resolveProviderKey(
-  userId: string,
+  ctx: AuthedUserContext,
   providerKeyId: string | undefined,
   res: Response,
 ): Promise<ResolvedKey | null> {
   const db = getDb();
+  const { userId } = ctx;
 
   if (providerKeyId) {
     const [row] = await db
       .select({
         id: providerKeys.id,
         provider: providerKeys.provider,
+        organizationId: providerKeys.organizationId,
         vaultSecretId: providerKeys.vaultSecretId,
       })
       .from(providerKeys)
       .where(
         and(
+          orgScopeFilter(providerKeys, ctx),
           eq(providerKeys.id, providerKeyId),
           eq(providerKeys.userId, userId),
         ),
@@ -149,6 +138,9 @@ async function resolveProviderKey(
       res.status(404).json({ error: "key_not_found" });
       return null;
     }
+    // Defense in depth — the SELECT above is already org-scoped, but this
+    // catches the degenerate case where a future change drops the scope.
+    assertOrgAccess(row.organizationId, ctx);
     if (!isProvider(row.provider)) {
       res.status(500).json({
         error: "internal_error",
@@ -167,11 +159,16 @@ async function resolveProviderKey(
     .select({
       id: providerKeys.id,
       provider: providerKeys.provider,
+      organizationId: providerKeys.organizationId,
       vaultSecretId: providerKeys.vaultSecretId,
     })
     .from(providerKeys)
     .where(
-      and(eq(providerKeys.userId, userId), eq(providerKeys.isDefault, true)),
+      and(
+        orgScopeFilter(providerKeys, ctx),
+        eq(providerKeys.userId, userId),
+        eq(providerKeys.isDefault, true),
+      ),
     )
     .orderBy(desc(providerKeys.createdAt))
     .limit(1);
@@ -182,6 +179,7 @@ async function resolveProviderKey(
     });
     return null;
   }
+  assertOrgAccess(row.organizationId, ctx);
   if (!isProvider(row.provider)) {
     res.status(500).json({
       error: "internal_error",
@@ -263,7 +261,7 @@ function computeCost(
 }
 
 async function recordSuccessAndUpdateKey(args: {
-  userId: string;
+  ctx: AuthedUserContext;
   providerKeyId: string;
   provider: Provider;
   model: string;
@@ -272,7 +270,7 @@ async function recordSuccessAndUpdateKey(args: {
   pricing: Pricing | null;
 }): Promise<{ promptId: string; estimatedCostUsd: string | null }> {
   const {
-    userId,
+    ctx,
     providerKeyId,
     provider,
     model,
@@ -280,6 +278,7 @@ async function recordSuccessAndUpdateKey(args: {
     result,
     pricing,
   } = args;
+  const { userId, organizationId } = ctx;
 
   const estimatedCostUsd = computeCost(
     result.inputTokens,
@@ -293,6 +292,7 @@ async function recordSuccessAndUpdateKey(args: {
       .insert(prompts)
       .values({
         userId,
+        organizationId,
         providerKeyId,
         provider,
         model,
@@ -314,20 +314,26 @@ async function recordSuccessAndUpdateKey(args: {
     await tx
       .update(providerKeys)
       .set({ lastUsedAt: now, lastValidatedAt: now })
-      .where(eq(providerKeys.id, providerKeyId));
+      .where(
+        and(
+          orgScopeFilter(providerKeys, ctx),
+          eq(providerKeys.id, providerKeyId),
+        ),
+      );
     return { promptId: row.id, estimatedCostUsd };
   });
 }
 
 async function recordErrorAndUpdateKey(args: {
-  userId: string;
+  ctx: AuthedUserContext;
   providerKeyId: string;
   provider: Provider;
   model: string;
   promptText: string;
   result: Extract<ProviderInvocationResult, { status: "error" | "timeout" }>;
 }): Promise<{ promptId: string }> {
-  const { userId, providerKeyId, provider, model, promptText, result } = args;
+  const { ctx, providerKeyId, provider, model, promptText, result } = args;
+  const { userId, organizationId } = ctx;
 
   const db = getDb();
   return db.transaction(async (tx) => {
@@ -335,6 +341,7 @@ async function recordErrorAndUpdateKey(args: {
       .insert(prompts)
       .values({
         userId,
+        organizationId,
         providerKeyId,
         provider,
         model,
@@ -352,23 +359,24 @@ async function recordErrorAndUpdateKey(args: {
     await tx
       .update(providerKeys)
       .set({ lastUsedAt: new Date() })
-      .where(eq(providerKeys.id, providerKeyId));
+      .where(
+        and(
+          orgScopeFilter(providerKeys, ctx),
+          eq(providerKeys.id, providerKeyId),
+        ),
+      );
     return { promptId: row.id };
   });
 }
 
 async function handlePrompt(req: Request, res: Response): Promise<void> {
-  const userId = await resolveUserId(req, res);
-  if (!userId) return;
+  const ctx = getCtx(req);
+  const { userId } = ctx;
 
   const body = parseBody(req, res);
   if (!body) return;
 
-  const providerKey = await resolveProviderKey(
-    userId,
-    body.providerKeyId,
-    res,
-  );
+  const providerKey = await resolveProviderKey(ctx, body.providerKeyId, res);
   if (!providerKey) return;
 
   const model = await resolveModel(providerKey.provider, body.model);
@@ -393,7 +401,7 @@ async function handlePrompt(req: Request, res: Response): Promise<void> {
 
   if (result.status === "success") {
     const { promptId, estimatedCostUsd } = await recordSuccessAndUpdateKey({
-      userId,
+      ctx,
       providerKeyId: providerKey.id,
       provider: providerKey.provider,
       model,
@@ -424,7 +432,7 @@ async function handlePrompt(req: Request, res: Response): Promise<void> {
   }
 
   const { promptId } = await recordErrorAndUpdateKey({
-    userId,
+    ctx,
     providerKeyId: providerKey.id,
     provider: providerKey.provider,
     model,
@@ -449,5 +457,5 @@ async function handlePrompt(req: Request, res: Response): Promise<void> {
 }
 
 export function registerPromptRoutes(app: Express): void {
-  app.post("/api/prompt", requireAuth, handlePrompt);
+  app.post("/api/prompt", requireAuth, requireHydratedUser, handlePrompt);
 }

@@ -1,10 +1,18 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { Express, Request, Response } from "express";
 import { getDb } from "../db/client.js";
-import { providerKeys, users } from "../db/schema.js";
+import { providerKeys } from "../db/schema.js";
 import { logUserAction } from "../lib/logging.js";
+import {
+  assertOrgAccess,
+  orgScopeFilter,
+  type AuthedUserContext,
+} from "../lib/orgScope.js";
 import * as vault from "../lib/vault.js";
-import { requireAuth } from "../middleware/requireAuth.js";
+import {
+  requireAuth,
+  requireHydratedUser,
+} from "../middleware/requireAuth.js";
 
 type Provider = "anthropic" | "openai" | "ollama";
 
@@ -33,36 +41,18 @@ function vaultSecretName(
   return `ai-connect:user:${userId}:provider:${provider}:key:${sanitizeLabelForVaultName(label)}`;
 }
 
-// Resolve the authenticated user's row id. Writes the failure response and
-// returns null when the caller should stop.
-async function resolveUserId(
-  req: Request,
-  res: Response,
-): Promise<string | null> {
-  const auth = req.user;
-  if (!auth) {
-    res.status(401).json({ error: "unauthorized", reason: "no_user_context" });
-    return null;
-  }
-  if (!auth.email) {
-    res.status(400).json({ error: "email claim missing" });
-    return null;
-  }
-  const [row] = await getDb()
-    .select({ id: users.id })
-    .from(users)
-    .where(eq(users.email, auth.email))
-    .limit(1);
-  if (!row) {
-    res.status(401).json({ error: "unauthorized", reason: "user_not_found" });
-    return null;
-  }
-  return row.id;
+// req.user is guaranteed present by requireHydratedUser; this just narrows
+// the type for downstream code without forcing a non-null assertion.
+function getCtx(req: Request): AuthedUserContext {
+  // The `!` is safe because requireHydratedUser ran before this handler.
+  // Express has no way to express "guaranteed populated by a prior
+  // middleware" at the type level.
+  return req.user!;
 }
 
 async function handleAddKey(req: Request, res: Response): Promise<void> {
-  const userId = await resolveUserId(req, res);
-  if (!userId) return;
+  const ctx = getCtx(req);
+  const { userId, organizationId } = ctx;
 
   const body = (req.body ?? {}) as Record<string, unknown>;
 
@@ -113,6 +103,7 @@ async function handleAddKey(req: Request, res: Response): Promise<void> {
         .from(providerKeys)
         .where(
           and(
+            orgScopeFilter(providerKeys, ctx),
             eq(providerKeys.userId, userId),
             eq(providerKeys.provider, provider),
           ),
@@ -124,6 +115,7 @@ async function handleAddKey(req: Request, res: Response): Promise<void> {
         .insert(providerKeys)
         .values({
           userId,
+          organizationId,
           provider,
           label,
           vaultSecretId,
@@ -166,13 +158,17 @@ async function handleAddKey(req: Request, res: Response): Promise<void> {
 }
 
 async function handleListKeys(req: Request, res: Response): Promise<void> {
-  const userId = await resolveUserId(req, res);
-  if (!userId) return;
+  const ctx = getCtx(req);
 
   const rows = await getDb()
     .select(keyProjection)
     .from(providerKeys)
-    .where(eq(providerKeys.userId, userId))
+    .where(
+      and(
+        orgScopeFilter(providerKeys, ctx),
+        eq(providerKeys.userId, ctx.userId),
+      ),
+    )
     .orderBy(
       providerKeys.provider,
       desc(providerKeys.isDefault),
@@ -193,8 +189,8 @@ async function handleListKeys(req: Request, res: Response): Promise<void> {
 }
 
 async function handleDeleteKey(req: Request, res: Response): Promise<void> {
-  const userId = await resolveUserId(req, res);
-  if (!userId) return;
+  const ctx = getCtx(req);
+  const { userId } = ctx;
 
   const keyId = req.params.id;
   if (typeof keyId !== "string" || !UUID_RE.test(keyId)) {
@@ -212,15 +208,24 @@ async function handleDeleteKey(req: Request, res: Response): Promise<void> {
       .select({
         id: providerKeys.id,
         provider: providerKeys.provider,
+        organizationId: providerKeys.organizationId,
         vaultSecretId: providerKeys.vaultSecretId,
         isDefault: providerKeys.isDefault,
       })
       .from(providerKeys)
       .where(
-        and(eq(providerKeys.id, keyId), eq(providerKeys.userId, userId)),
+        and(
+          orgScopeFilter(providerKeys, ctx),
+          eq(providerKeys.id, keyId),
+          eq(providerKeys.userId, userId),
+        ),
       )
       .limit(1);
     if (!row) return null;
+
+    // Belt-and-braces: the SELECT above is already org-scoped, so this
+    // can only fail if a future change drops the scope.
+    assertOrgAccess(row.organizationId, ctx);
 
     await tx.delete(providerKeys).where(eq(providerKeys.id, row.id));
 
@@ -230,6 +235,7 @@ async function handleDeleteKey(req: Request, res: Response): Promise<void> {
         .from(providerKeys)
         .where(
           and(
+            orgScopeFilter(providerKeys, ctx),
             eq(providerKeys.userId, userId),
             eq(providerKeys.provider, row.provider),
           ),
@@ -268,7 +274,12 @@ async function handleDeleteKey(req: Request, res: Response): Promise<void> {
 }
 
 export function registerKeysRoutes(app: Express): void {
-  app.post("/api/keys", requireAuth, handleAddKey);
-  app.get("/api/keys", requireAuth, handleListKeys);
-  app.delete("/api/keys/:id", requireAuth, handleDeleteKey);
+  app.post("/api/keys", requireAuth, requireHydratedUser, handleAddKey);
+  app.get("/api/keys", requireAuth, requireHydratedUser, handleListKeys);
+  app.delete(
+    "/api/keys/:id",
+    requireAuth,
+    requireHydratedUser,
+    handleDeleteKey,
+  );
 }

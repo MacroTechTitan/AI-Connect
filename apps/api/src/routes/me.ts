@@ -145,19 +145,22 @@ async function createUserWithOrg(email: string): Promise<MeResult> {
 }
 
 async function handleMe(req: Request, res: Response): Promise<void> {
-  // requireAuth always sets req.user before reaching here; the optional
-  // access keeps TypeScript happy without an `!` non-null assertion.
-  const auth = req.user;
-  if (!auth) {
+  // /api/me intentionally reads req.jwt (the raw JWT identity) rather than
+  // req.user (the hydrated DB context). On a brand-new user's first sign-in
+  // the DB row doesn't exist yet, so req.user is undefined — this handler
+  // is the one that creates it. Every other protected route uses
+  // requireHydratedUser and reads req.user directly.
+  const jwt = req.jwt;
+  if (!jwt) {
     res.status(401).json({ error: "unauthorized", reason: "no_user_context" });
     return;
   }
-  if (!auth.email) {
+  if (!jwt.email) {
     res.status(400).json({ error: "email claim missing" });
     return;
   }
 
-  const email = auth.email;
+  const email = jwt.email;
 
   let result = await fetchUserWithOrg(email);
   let created = false;
