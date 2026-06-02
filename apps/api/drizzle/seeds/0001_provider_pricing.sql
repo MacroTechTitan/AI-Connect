@@ -14,24 +14,30 @@
 -- Each provider has exactly one is_default = true row. The /api/prompt model
 -- resolver falls back to that default when the request body omits a model.
 --
--- Rates sourced 2026-05-26 from each vendor's public pricing page.
+-- IMPORTANT: When updating this seed, also check the corresponding deprecation
+-- status on each vendor's docs. Stale model IDs return 404 from the upstream API
+-- and break /api/prompt silently from the user's perspective (just a provider error
+-- bubbled through). Sprint 2 smoke test caught this — the original seed used
+-- claude-3-5-sonnet-20241022 and gpt-4o which had been deprecated by mid-2026.
+--
+-- Rates and model IDs sourced 2026-06-02 from each vendor's public pricing page.
 
--- Anthropic
+-- Anthropic (current models as of 2026-06-02 per platform.claude.com/docs/en/about-claude/pricing)
 INSERT INTO provider_pricing
   (provider, model, display_name, input_per_1m_tokens_usd, output_per_1m_tokens_usd, context_window_tokens, is_default, is_active, effective_from)
 VALUES
-  ('anthropic', 'claude-3-5-sonnet-20241022', 'Claude 3.5 Sonnet (2024-10-22)',  3.0000, 15.0000, 200000, true,  true, now()),
-  ('anthropic', 'claude-3-5-haiku-20241022',  'Claude 3.5 Haiku (2024-10-22)',   0.8000,  4.0000, 200000, false, true, now()),
-  ('anthropic', 'claude-3-opus-20240229',     'Claude 3 Opus',                  15.0000, 75.0000, 200000, false, true, now())
+  ('anthropic', 'claude-sonnet-4-6', 'Claude Sonnet 4.6', 3.0000, 15.0000, 1000000, true,  true, now()),
+  ('anthropic', 'claude-haiku-4-5',  'Claude Haiku 4.5',  1.0000,  5.0000,  200000, false, true, now()),
+  ('anthropic', 'claude-opus-4-8',   'Claude Opus 4.8',   5.0000, 25.0000, 1000000, false, true, now())
 ON CONFLICT (provider, model, effective_from) DO NOTHING;
 
--- OpenAI
+-- OpenAI (current GPT-5 family as of 2026-06-02; verify on openai.com/pricing)
 INSERT INTO provider_pricing
   (provider, model, display_name, input_per_1m_tokens_usd, output_per_1m_tokens_usd, context_window_tokens, is_default, is_active, effective_from)
 VALUES
-  ('openai', 'gpt-4o',      'GPT-4o',       2.5000, 10.0000, 128000, true,  true, now()),
-  ('openai', 'gpt-4o-mini', 'GPT-4o mini',  0.1500,  0.6000, 128000, false, true, now()),
-  ('openai', 'gpt-4-turbo', 'GPT-4 Turbo', 10.0000, 30.0000, 128000, false, true, now())
+  ('openai', 'gpt-5',      'GPT-5',      5.0000, 20.0000, 400000, true,  true, now()),
+  ('openai', 'gpt-5-mini', 'GPT-5 mini', 0.5000,  2.0000, 400000, false, true, now()),
+  ('openai', 'gpt-4.1',    'GPT-4.1',    2.0000,  8.0000, 200000, false, true, now())
 ON CONFLICT (provider, model, effective_from) DO NOTHING;
 
 -- Ollama (local — no per-token cost; rows exist so the model dropdown / default
