@@ -410,12 +410,19 @@ async function handlePrompt(req: Request, res: Response): Promise<void> {
       pricing,
     });
 
-    await logUserAction(userId, "invoke_prompt", "prompt", promptId, {
-      provider: providerKey.provider,
-      model,
-      status: "success",
-      cost: estimatedCostUsd,
-    });
+    await logUserAction(
+      userId,
+      "invoke_prompt",
+      "prompt",
+      promptId,
+      ctx.organizationId,
+      {
+        provider: providerKey.provider,
+        model,
+        status: "success",
+        cost: estimatedCostUsd,
+      },
+    );
 
     res.status(200).json({
       response: result.responseText,
@@ -440,12 +447,19 @@ async function handlePrompt(req: Request, res: Response): Promise<void> {
     result,
   });
 
-  await logUserAction(userId, "invoke_prompt", "prompt", promptId, {
-    provider: providerKey.provider,
-    model,
-    status: result.status,
-    errorCode: result.errorCode,
-  });
+  await logUserAction(
+    userId,
+    "invoke_prompt",
+    "prompt",
+    promptId,
+    ctx.organizationId,
+    {
+      provider: providerKey.provider,
+      model,
+      status: result.status,
+      errorCode: result.errorCode,
+    },
+  );
 
   res.status(502).json({
     error: "provider_error",

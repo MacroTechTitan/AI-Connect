@@ -203,17 +203,22 @@ async function handleMe(req: Request, res: Response): Promise<void> {
     // logUserAction swallows its own errors and never throws — safe to await.
     // Runs outside the upsert transaction so a logging-table hiccup can't
     // roll back a successful user creation.
+    // result.org is guaranteed non-null on the created path (createUserWithOrg
+    // mints one in the same transaction). The ?? is for typing only.
+    const newOrgId = result.org?.id ?? null;
     await logUserAction(
       result.user.id,
       "first_login_create_user",
       "user",
       result.user.id,
+      newOrgId,
     );
     if (result.org) {
       await logUserAction(
         result.user.id,
         "first_login_create_organization",
         "organization",
+        result.org.id,
         result.org.id,
       );
     }

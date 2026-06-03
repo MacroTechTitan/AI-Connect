@@ -177,9 +177,14 @@ async function handleCreateProject(
     return;
   }
 
-  await logUserAction(ctx.userId, "create_project", "project", inserted.id, {
-    slug: inserted.slug,
-  });
+  await logUserAction(
+    ctx.userId,
+    "create_project",
+    "project",
+    inserted.id,
+    ctx.organizationId,
+    { slug: inserted.slug },
+  );
 
   res.status(201).json(toResponse(inserted));
 }
@@ -245,9 +250,14 @@ async function handleDeleteProject(
     return;
   }
 
-  await logUserAction(ctx.userId, "delete_project", "project", removed.id, {
-    slug: removed.slug,
-  });
+  await logUserAction(
+    ctx.userId,
+    "delete_project",
+    "project",
+    removed.id,
+    ctx.organizationId,
+    { slug: removed.slug },
+  );
 
   res.status(200).json({ id: removed.id, deleted: true });
 }

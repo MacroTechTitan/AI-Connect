@@ -145,6 +145,7 @@ async function handleAddKey(req: Request, res: Response): Promise<void> {
     "add_provider_key",
     "provider_key",
     inserted.id,
+    ctx.organizationId,
     { provider: inserted.provider },
   );
 
@@ -267,6 +268,7 @@ async function handleDeleteKey(req: Request, res: Response): Promise<void> {
     "remove_provider_key",
     "provider_key",
     removed.id,
+    ctx.organizationId,
     { provider: removed.provider },
   );
 

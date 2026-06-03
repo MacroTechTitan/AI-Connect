@@ -28,17 +28,37 @@ const KEY_PLACEHOLDER: Record<Provider, string> = {
 
 type GetAccessToken = (opts?: { cacheMode?: "off" }) => Promise<string>;
 
+// Sentinel error message thrown by authedFetch when the Auth0 SDK fails to
+// produce an access token — typically because the refresh token is missing,
+// the user needs to re-auth, or consent expired. Components catch this and
+// render <SessionExpiredNotice /> instead of the misleading "couldn't reach
+// the server" copy.
+const SESSION_EXPIRED = "session_expired";
+
+function isSessionExpired(err: unknown): boolean {
+  return err instanceof Error && err.message === SESSION_EXPIRED;
+}
+
 // Single retry on 401: forces a token refresh in case the cached access token
-// has expired or its audience/scope drifted.
+// has expired or its audience/scope drifted. If the SDK itself throws on the
+// token call (Missing Refresh Token / Login Required / Consent Required),
+// surface a structured session_expired error so the UI can show recovery.
 async function authedFetch(
   path: string,
   init: RequestInit,
   getAccessTokenSilently: GetAccessToken,
 ): Promise<Response> {
   const send = async (forceRefresh: boolean): Promise<Response> => {
-    const token = await getAccessTokenSilently(
-      forceRefresh ? { cacheMode: "off" } : undefined,
-    );
+    let token: string;
+    try {
+      token = await getAccessTokenSilently(
+        forceRefresh ? { cacheMode: "off" } : undefined,
+      );
+    } catch (err) {
+      const wrapped = new Error(SESSION_EXPIRED);
+      (wrapped as Error & { cause?: unknown }).cause = err;
+      throw wrapped;
+    }
     return fetch(`${API_BASE}${path}`, {
       ...init,
       headers: {
@@ -50,6 +70,25 @@ async function authedFetch(
   const res = await send(false);
   if (res.status === 401) return send(true);
   return res;
+}
+
+// Inline recovery UI rendered by any component that catches a
+// session_expired error. The button triggers loginWithRedirect — one click
+// and the user is back through the Auth0 flow.
+function SessionExpiredNotice() {
+  const { loginWithRedirect } = useAuth0();
+  return (
+    <div className="session-expired">
+      <span>Your session expired.</span>
+      <button
+        type="button"
+        className="btn-primary"
+        onClick={() => void loginWithRedirect()}
+      >
+        Sign in again
+      </button>
+    </div>
+  );
 }
 
 function formatCost(cost: number | null | undefined): string {
@@ -74,6 +113,7 @@ function KeysPanel({
 }) {
   const [keys, setKeys] = useState<KeyRow[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   const [addProvider, setAddProvider] = useState<Provider>("anthropic");
   const [addLabel, setAddLabel] = useState("");
@@ -101,7 +141,11 @@ function KeysPanel({
       }
       const body = (await res.json()) as { keys?: KeyRow[] };
       setKeys(body.keys ?? []);
-    } catch {
+    } catch (err) {
+      if (isSessionExpired(err)) {
+        setSessionExpired(true);
+        return;
+      }
       setListError("Couldn't reach the server. Try again.");
       setKeys([]);
     }
@@ -150,7 +194,11 @@ function KeysPanel({
       setAddLabel("");
       setAddKey("");
       await refresh();
-    } catch {
+    } catch (err) {
+      if (isSessionExpired(err)) {
+        setSessionExpired(true);
+        return;
+      }
       setAddError("Couldn't reach the server. Try again.");
     } finally {
       setAdding(false);
@@ -173,9 +221,22 @@ function KeysPanel({
         return;
       }
       await refresh();
-    } catch {
+    } catch (err) {
+      if (isSessionExpired(err)) {
+        setSessionExpired(true);
+        return;
+      }
       setListError("Couldn't reach the server. Try again.");
     }
+  }
+
+  if (sessionExpired) {
+    return (
+      <div className="settings-subsection">
+        <h3>Provider keys</h3>
+        <SessionExpiredNotice />
+      </div>
+    );
   }
 
   return (
@@ -268,6 +329,7 @@ function ProjectsPanel({
 }) {
   const [projects, setProjects] = useState<ProjectRow[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   const [addName, setAddName] = useState("");
   const [addDescription, setAddDescription] = useState("");
@@ -294,7 +356,11 @@ function ProjectsPanel({
       }
       const body = (await res.json()) as { projects?: ProjectRow[] };
       setProjects(body.projects ?? []);
-    } catch {
+    } catch (err) {
+      if (isSessionExpired(err)) {
+        setSessionExpired(true);
+        return;
+      }
       setListError("Couldn't reach the server. Try again.");
       setProjects([]);
     }
@@ -350,7 +416,11 @@ function ProjectsPanel({
       setAddName("");
       setAddDescription("");
       await refresh();
-    } catch {
+    } catch (err) {
+      if (isSessionExpired(err)) {
+        setSessionExpired(true);
+        return;
+      }
       setAddError("Couldn't reach the server. Try again.");
     } finally {
       setAdding(false);
@@ -373,9 +443,22 @@ function ProjectsPanel({
         return;
       }
       await refresh();
-    } catch {
+    } catch (err) {
+      if (isSessionExpired(err)) {
+        setSessionExpired(true);
+        return;
+      }
       setListError("Couldn't reach the server. Try again.");
     }
+  }
+
+  if (sessionExpired) {
+    return (
+      <div className="settings-subsection">
+        <h3>Projects</h3>
+        <SessionExpiredNotice />
+      </div>
+    );
   }
 
   return (
@@ -459,6 +542,7 @@ function PromptTester({
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<PromptSuccess | null>(null);
   const [errorBlock, setErrorBlock] = useState<PromptErrorBlock | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   async function handleSend(e: FormEvent) {
     e.preventDefault();
@@ -533,7 +617,11 @@ function PromptTester({
         errorCode: null,
         latencyMs: null,
       });
-    } catch {
+    } catch (err) {
+      if (isSessionExpired(err)) {
+        setSessionExpired(true);
+        return;
+      }
       setErrorBlock({
         message: "Couldn't reach the server. Try again.",
         errorCode: null,
@@ -542,6 +630,15 @@ function PromptTester({
     } finally {
       setSending(false);
     }
+  }
+
+  if (sessionExpired) {
+    return (
+      <div className="settings-subsection">
+        <h3>Test a prompt</h3>
+        <SessionExpiredNotice />
+      </div>
+    );
   }
 
   return (
@@ -599,6 +696,7 @@ export function App() {
   const [health, setHealth] = useState<HealthStatus>("pending");
   const [me, setMe] = useState<MeShape | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
   const {
     isAuthenticated,
     isLoading,
@@ -629,15 +727,17 @@ export function App() {
     if (!isAuthenticated) {
       setMe(null);
       setShowSettings(false);
+      setSessionExpired(false);
       return;
     }
     let cancelled = false;
     (async () => {
       try {
-        const token = await getAccessTokenSilently();
-        const res = await fetch(`${API_BASE}/api/me`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await authedFetch(
+          "/api/me",
+          {},
+          getAccessTokenSilently,
+        );
         if (!res.ok) throw new Error(`/api/me responded ${res.status}`);
         const body = (await res.json()) as Partial<MeShape>;
         if (!cancelled && typeof body.role === "string") {
@@ -647,6 +747,10 @@ export function App() {
           });
         }
       } catch (err) {
+        if (isSessionExpired(err)) {
+          if (!cancelled) setSessionExpired(true);
+          return;
+        }
         // Per Sprint 1 scope: log only; don't surface to user.
         console.error("[api/me] fetch failed:", err);
       }
@@ -710,7 +814,10 @@ export function App() {
           <p>
             <a href={CHANGELOG_URL}>Read the full changelog →</a>
           </p>
-          {!isLoading && (
+          {!isLoading && isAuthenticated && sessionExpired ? (
+            <SessionExpiredNotice />
+          ) : null}
+          {!isLoading && !(isAuthenticated && sessionExpired) && (
             <p className="auth-line">
               {isAuthenticated ? (
                 <>
