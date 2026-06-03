@@ -132,6 +132,46 @@ BYOAI provider abstraction: connect-your-own-AI-key flow, capture per-call cost 
 ### Sprint 3 starting point
 Multi-tenant data model: organizations table, projects table, users → organizations relationship, org-level isolation enforced at query layer. Per Sprint 0.5 architectural commitment ("organizations → projects → users → audit logs, AI usage" — not flat). Sprint 3 also includes refactoring provider_keys to be optionally org-scoped (so an organization can share an API key across users) — but only if Sprint 3 stays tight; otherwise that goes to Sprint 3.5.
 
+## Sprint 3 — Multi-tenant data model (2026-06-03)
+- Branch: sprint/3-multi-tenant (merged) plus direct-to-master Sprint 3.5 production polish
+- Merged to master: 2026-06-03 as PR #7 merge
+- Production polish on master: a3b2c6d (logUserAction populates organization_id + frontend handles Auth0 session expiry)
+- Production verified: 2026-06-03 — smoke test passed end-to-end: lazy org creation on first sign-in, org name appears in status block, project CRUD works, audit log entries populate organization_id correctly (verified via SQL comparison of pre/post-3.5 rows).
+
+### What shipped
+- Two new tables: organizations (id, name, unique slug, created_by_user_id, timestamps) and projects (id, organization_id, name, slug unique-within-org, description, created_by_user_id, timestamps).
+- Column additions: organization_id added to users, provider_keys, prompts, user_audit_logs, system_logs, dev_logs. project_id added to prompts and the three log tables.
+- 10 new indexes including partial indexes on nullable columns.
+- 11 foreign keys with appropriate ON DELETE semantics (cascade for owned data, restrict for ownership refs, set null for denormalization).
+- One-time backfill SQL migration (apps/api/drizzle/seeds/0002_backfill_organizations.sql) assigning organization_id to existing users — admin gets MacroTechTitan org, others get personal "{email-prefix}'s workspace" orgs, plus denormalization fill into provider_keys, prompts, user_audit_logs.
+- Lazy org creation in /api/me — new users get a personal org auto-created in the same transaction as their user row, with slug collision retry (-2 through -5, then fallback to slug-userIdPrefix).
+- Query-layer org isolation via new apps/api/src/lib/orgScope.ts — AuthedUserContext type, orgScopeFilter SQL fragment, withOrgScope helper, assertOrgAccess defensive check. requireAuth middleware now hydrates req.user with full context; new requireHydratedUser middleware gates routes that need the user row.
+- /api/keys, /api/prompt, /api/projects all filter by organization_id and populate it on insert.
+- POST/GET/DELETE /api/projects endpoints with slug auto-derivation, collision handling, audit logging.
+- Frontend: status block shows org name alongside email/role; new Projects subsection in settings panel above Provider keys; renamed "Manage provider keys" link to "Manage settings".
+- Bundle: 341.73 KB raw / 106.15 KB gzipped (+4 KB raw / +0.7 KB gzipped from Sprint 2; +1 KB additional from Sprint 3.5 polish).
+
+### Lessons learned
+- Supabase auto-enables RLS on newly CREATEd tables despite in-migration DISABLE statements — but NOT on ALTERed tables. Sprint 2 caught the first; Sprint 3 confirmed the second behavior. New rule: every migration that creates a new table needs a follow-up manual DISABLE statement run separately in the SQL editor. Altering existing tables is fine.
+- Adding new columns to existing user-scoped tables means existing INSERT/UPDATE paths may not populate them. Sprint 3 added organization_id to user_audit_logs but didn't update logUserAction — result: every new audit row had null org_id until Sprint 3.5 fixed it. Lesson: when adding a column to a table that has helper functions, audit every helper that writes to it as part of the same sprint, not as a follow-up.
+- Spec deviation that improved the spec: my Commit 4 spec said requireAuth should 401 when the user row doesn't exist. Claude Code identified that this breaks /api/me's lazy-create flow (the route that creates the user can never run if it requires the user to exist). Split into req.jwt (always present after JWT verify) and req.user (only when row exists), with a separate requireHydratedUser middleware for routes that need the row. Cleaner contract; better separation of concerns.
+- The chicken-and-egg of users.organization_id ↔ organizations.created_by_user_id was solved with a three-step transaction: insert user with org_id NULL, insert org with created_by pointing at user, then UPDATE user.org_id. The user row exists briefly inside the transaction with NULL org_id; no other queries see it until COMMIT. Cleaner than deferred constraints for this case.
+- Auth0's silent token refresh can fail with "Missing Refresh Token" when offline_access wasn't in the original scope OR when the session is very stale. Old UX showed "Couldn't reach the server" — misleading. Sprint 3.5 added a structured session_expired error class with isSessionExpired predicate, and a SessionExpiredNotice component with one-click loginWithRedirect recovery.
+
+### Deferred to Sprint 3.5 / housekeeping
+- Validate-key-on-add UX (catch deprecated models at key-add rather than first prompt) — still deferred from Sprint 2.5.
+- Bundle code-splitting for Auth0 SDK before Sprint 4 adds Project Genesis UI. Bundle is at 341.73 KB raw / 106.15 KB gzipped — still acceptable but the SDK + settings UI together account for most of it.
+- Branch protection bypass continues to show "Bypassed rule violations" on every push. Either disable the rule for solo dev or commit to PRs consistently.
+- 26 vulnerabilities flagged by Dependabot — still need triage pass.
+- /api/me now does a JOIN to organizations. Was previously a single-table SELECT. Not a problem yet (one user per signin), but worth monitoring as the query path grows.
+- Org-renaming endpoint (PATCH /api/organizations/:id) — out of scope for Sprint 3 but probably needed before Sprint 4 ships, since auto-generated workspace names aren't what users want long-term.
+- Email validation regex for Auth0 emails that contain characters beyond [.+] — current slug derivation doesn't handle email addresses with unusual punctuation. Low priority but worth thinking about before Project Genesis demos.
+
+### Sprint 4 starting point
+Project Genesis MVP. Per Sprint 0.5 architectural commitment, this is when AI Connect becomes visible — sign up, click "Start new dev project," AI Connect provisions Vercel + Render + Supabase + Auth0 + DNS in ~10 minutes via real automation (not mocked). The signup wizard's Path A (custom build), not Path B (takeover existing — that's Sprint 5).
+
+The data model is ready: projects exist (Sprint 3), provider keys exist (Sprint 2), audit logs scope by org/project (Sprints 2+3). Sprint 4 builds the provisioning automation layer on top.
+
 ---
 
-*Last updated: 2026-06-02*
+*Last updated: 2026-06-03*
