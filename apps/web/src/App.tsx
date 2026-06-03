@@ -250,6 +250,191 @@ function KeysPanel({
   );
 }
 
+interface ProjectRow {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  organization_id: string;
+  created_by_user_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+function ProjectsPanel({
+  getAccessTokenSilently,
+}: {
+  getAccessTokenSilently: GetAccessToken;
+}) {
+  const [projects, setProjects] = useState<ProjectRow[] | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+
+  const [addName, setAddName] = useState("");
+  const [addDescription, setAddDescription] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setListError(null);
+    setProjects(null);
+    try {
+      const res = await authedFetch(
+        "/api/projects",
+        {},
+        getAccessTokenSilently,
+      );
+      if (!res.ok) {
+        setListError(
+          res.status >= 500
+            ? "Something went wrong on our end. Try again in a moment."
+            : "Couldn't load projects.",
+        );
+        setProjects([]);
+        return;
+      }
+      const body = (await res.json()) as { projects?: ProjectRow[] };
+      setProjects(body.projects ?? []);
+    } catch {
+      setListError("Couldn't reach the server. Try again.");
+      setProjects([]);
+    }
+  }, [getAccessTokenSilently]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function handleAdd(e: FormEvent) {
+    e.preventDefault();
+    setAddError(null);
+    setAdding(true);
+    try {
+      const res = await authedFetch(
+        "/api/projects",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: addName,
+            ...(addDescription ? { description: addDescription } : {}),
+          }),
+        },
+        getAccessTokenSilently,
+      );
+      if (!res.ok) {
+        let msg =
+          res.status >= 500
+            ? "Something went wrong on our end. Try again in a moment."
+            : "Couldn't create project — try a different name?";
+        try {
+          const body = (await res.json()) as {
+            error?: string;
+            reason?: string;
+          };
+          if (body?.error === "slug_unavailable") {
+            msg =
+              "A project with that name already exists in your organization. Try a different name.";
+          } else if (body?.error === "no_organization") {
+            msg = "Your account isn't attached to an organization yet.";
+          } else if (body?.reason) {
+            msg = body.reason;
+          } else if (body?.error) {
+            msg = body.error;
+          }
+        } catch {
+          // body wasn't JSON; keep the status-derived message
+        }
+        setAddError(msg);
+        return;
+      }
+      setAddName("");
+      setAddDescription("");
+      await refresh();
+    } catch {
+      setAddError("Couldn't reach the server. Try again.");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    try {
+      const res = await authedFetch(
+        `/api/projects/${id}`,
+        { method: "DELETE" },
+        getAccessTokenSilently,
+      );
+      if (!res.ok) {
+        setListError(
+          res.status >= 500
+            ? "Something went wrong on our end. Try again in a moment."
+            : "Couldn't delete that project.",
+        );
+        return;
+      }
+      await refresh();
+    } catch {
+      setListError("Couldn't reach the server. Try again.");
+    }
+  }
+
+  return (
+    <div className="settings-subsection">
+      <h3>Projects</h3>
+      {projects === null && !listError ? (
+        <p className="muted">Loading projects…</p>
+      ) : null}
+      {listError ? <p className="error">{listError}</p> : null}
+      {projects && projects.length === 0 && !listError ? (
+        <p className="muted">No projects yet. Create one below.</p>
+      ) : null}
+      {projects && projects.length > 0 ? (
+        <ul className="projects-list">
+          {projects.map((p) => (
+            <li key={p.id} className="project-row">
+              <div className="project-info">
+                <div className="project-name">{p.name}</div>
+                <div className="project-slug">{p.slug}</div>
+                {p.description ? (
+                  <div className="project-description">{p.description}</div>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="btn-danger"
+                onClick={() => void handleDelete(p.id)}
+              >
+                Delete
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      <form className="add-project-form" onSubmit={(e) => void handleAdd(e)}>
+        <input
+          type="text"
+          placeholder="e.g. My SaaS project"
+          value={addName}
+          onChange={(e) => setAddName(e.target.value)}
+          maxLength={100}
+          required
+        />
+        <textarea
+          placeholder="Optional. What is this project?"
+          value={addDescription}
+          onChange={(e) => setAddDescription(e.target.value)}
+          maxLength={5000}
+        />
+        <button type="submit" className="btn-primary" disabled={adding}>
+          {adding ? "Adding…" : "Add project"}
+        </button>
+        {addError ? <p className="error">{addError}</p> : null}
+      </form>
+    </div>
+  );
+}
+
 interface PromptSuccess {
   response: string;
   model: string;
@@ -405,9 +590,14 @@ function PromptTester({
   );
 }
 
+interface MeShape {
+  role: string;
+  organization: { id: string; name: string; slug: string } | null;
+}
+
 export function App() {
   const [health, setHealth] = useState<HealthStatus>("pending");
-  const [role, setRole] = useState<string | undefined>(undefined);
+  const [me, setMe] = useState<MeShape | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const {
     isAuthenticated,
@@ -437,7 +627,7 @@ export function App() {
 
   useEffect(() => {
     if (!isAuthenticated) {
-      setRole(undefined);
+      setMe(null);
       setShowSettings(false);
       return;
     }
@@ -449,9 +639,12 @@ export function App() {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (!res.ok) throw new Error(`/api/me responded ${res.status}`);
-        const body = (await res.json()) as { role?: unknown };
+        const body = (await res.json()) as Partial<MeShape>;
         if (!cancelled && typeof body.role === "string") {
-          setRole(body.role);
+          setMe({
+            role: body.role,
+            organization: body.organization ?? null,
+          });
         }
       } catch (err) {
         // Per Sprint 1 scope: log only; don't surface to user.
@@ -522,14 +715,15 @@ export function App() {
               {isAuthenticated ? (
                 <>
                   Signed in as {user?.email}
-                  {role !== undefined ? ` (role: ${role})` : ""}
+                  {me?.role ? ` (role: ${me.role})` : ""}
+                  {me?.organization ? ` · ${me.organization.name}` : ""}
                   {" · "}
                   <button
                     type="button"
                     className="linklike"
                     onClick={() => setShowSettings((v) => !v)}
                   >
-                    {showSettings ? "Hide settings" : "Manage provider keys"}
+                    {showSettings ? "Hide settings" : "Manage settings"}
                   </button>
                   {" · "}
                   <button
@@ -560,6 +754,9 @@ export function App() {
         {isAuthenticated && showSettings ? (
           <section className="settings-block">
             <h2>Settings</h2>
+            <ProjectsPanel
+              getAccessTokenSilently={getAccessTokenSilently}
+            />
             <KeysPanel getAccessTokenSilently={getAccessTokenSilently} />
             <PromptTester
               getAccessTokenSilently={getAccessTokenSilently}

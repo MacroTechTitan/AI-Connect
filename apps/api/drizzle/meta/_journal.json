@@ -15,6 +15,13 @@
       "when": 1780339876733,
       "tag": "0001_bizarre_shinko_yamashiro",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780411460532,
+      "tag": "0002_flippant_newton_destine",
+      "breakpoints": true
     }
   ]
 }

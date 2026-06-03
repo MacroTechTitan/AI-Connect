@@ -1,17 +1,29 @@
 import type { NextFunction, Request, Response } from "express";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import { env } from "../lib/env.js";
+import {
+  getUserOrgContext,
+  type AuthedUserContext,
+} from "../lib/orgScope.js";
 
-export type AuthenticatedUser = {
+// Raw JWT identity attached to every authenticated request. Always present
+// after requireAuth resolves successfully — does NOT depend on a DB lookup.
+export interface JwtAuthContext {
   sub: string;
   email: string | undefined;
-};
+}
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
-      user?: AuthenticatedUser;
+      // Set by requireAuth on every successful JWT verification.
+      jwt?: JwtAuthContext;
+      // Set by requireAuth ONLY when the user row exists in the DB. Routes
+      // that need a hydrated context use requireHydratedUser to assert this.
+      // /api/me deliberately tolerates this being undefined so it can lazily
+      // create the user row on first sign-in.
+      user?: AuthedUserContext;
     }
   }
 }
@@ -96,7 +108,40 @@ export async function requireAuth(
     (v): v is string => typeof v === "string" && v.length > 0,
   );
 
-  req.user = { sub: payload.sub, email };
+  req.jwt = { sub: payload.sub, email };
+
+  // Attempt to hydrate the user from the DB. If the row exists, attach the
+  // full AuthedUserContext. If not (first /api/me hit, or a DB hiccup),
+  // leave req.user undefined and let downstream middleware/handlers decide.
+  if (email) {
+    try {
+      const ctx = await getUserOrgContext(email);
+      if (ctx) req.user = ctx;
+    } catch {
+      // Swallow — we still want the request to proceed for routes that
+      // can work from req.jwt alone. requireHydratedUser will 401 anything
+      // that needs the hydrated context.
+    }
+  }
+
+  next();
+}
+
+// Asserts the request has a hydrated AuthedUserContext on req.user. Use
+// this after requireAuth on every route that touches user/org-scoped data.
+// /api/me deliberately does NOT use it — it needs to handle the no-user-yet
+// case to support first sign-in.
+export function requireHydratedUser(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  if (!req.user) {
+    res
+      .status(401)
+      .json({ error: "unauthorized", reason: "user_not_hydrated" });
+    return;
+  }
   next();
 }
 
