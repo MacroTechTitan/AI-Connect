@@ -256,6 +256,68 @@ html, body, #root { margin: 0; min-height: 100vh; }
 }
 .btn-danger:hover { background: rgba(248, 113, 113, 0.08); }
 
+.projects-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.project-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.35rem;
+  font-size: 0.9rem;
+}
+.project-row .project-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.project-row .project-name {
+  font-weight: 600;
+}
+.project-row .project-slug {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.75rem;
+  opacity: 0.6;
+}
+.project-row .project-description {
+  font-size: 0.85rem;
+  opacity: 0.8;
+  margin-top: 0.2rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.add-project-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.add-project-form input,
+.add-project-form textarea {
+  background: #15171c;
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.35rem;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  font-size: 0.9rem;
+}
+.add-project-form textarea {
+  min-height: 4rem;
+  resize: vertical;
+}
+
 .prompt-result {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.1);
