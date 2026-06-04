@@ -186,6 +186,26 @@ These don't have architectural implications today. They're parked here for futur
 - **On-prem deployment kit.** Containerized AI Connect for regulated/enterprise customers (Shield AI connection, gov procurement).
 - **AI tool selector based on task semantics.** Platform auto-picks the right AI based on prompt content, not user choice.
 
+### Sprint 4 follow-ups (target: Sprint 4.5 / housekeeping)
+
+Issues identified during Sprint 4 build worth tracking:
+
+- Process-crash safety: orchestrator runs as a detached promise (Decision A1). If the Render API process dies mid-genesis, the project's provisioning_state will be stuck at 'provisioning' indefinitely. Sprint 6+ should introduce a real job queue (BullMQ + Redis, or pg-boss). For now, document a manual recovery query: UPDATE projects SET provisioning_state = 'failed' WHERE provisioning_state = 'provisioning' AND id NOT IN (SELECT DISTINCT project_id FROM project_provisioning_events WHERE created_at > now() - interval '30 minutes').
+
+- Resource cleanup gap: when a user removes a project from the UI (DELETE /api/projects/:id), AI Connect only deletes the DB row. The provisioned cloud resources (GitHub repo, Vercel project, Render service, Supabase project) are NOT cleaned up. Sprint 5 should add a "delete all provisioned resources" option, or change DELETE to do that by default with a confirmation step.
+
+- LISTEN/NOTIFY for SSE: the SSE endpoint polls the DB every 1 second. This is fine at Sprint 4's scale but won't scale to 100+ concurrent genesis runs. Sprint 6+ should move to Postgres LISTEN/NOTIFY for push-based event streaming.
+
+- Template scaffolding: the GenesisContext has a templateRepoUrl field that's currently unused (Sprint 4 creates an empty repo via auto_init). Sprint 5 should add template selection (Next.js, SvelteKit, plain HTML/JS) and have the GitHub step initialize from the chosen template.
+
+- DNS + Auth0 + Stripe automation: Sprint 4's wire_github_to_render and inject_env_vars steps are no-op placeholders. Sprint 5 (DNS), Sprint 6 (Auth0 tenant), and Sprint 9 (Stripe Connect) will fill them in.
+
+- Org-owned platform credentials: same XOR refactor pending for provider_keys. Sprint 4-5 should add organization_id as the alternative to user_id on both tables, with a CHECK constraint that exactly one is set.
+
+- Identity persistence: PlatformCredentialsPanel UI shows the validated identity (e.g., "as joegelet" for GitHub) only on the credential row freshly added during the session. After a page refresh, this disappears. Sprint 5 should persist identity_json (jsonb) on platform_credentials so GET responses include it.
+
+- Validate-key-on-add for AI providers: still deferred from Sprint 2.5 — when users add an Anthropic/OpenAI key in /api/keys, we should fire a tiny test call before storing to catch deprecated-model or bad-token errors at registration time, matching what Sprint 4 does for platform credentials.
+
 ## Rejected / out of scope (named so they don't come back)
 
 - **AI Connect as a hosted IDE.** Reproducing Cursor/VS Code is multi-year work with no defensibility. AI Connect integrates with IDEs, not becomes one.
@@ -194,4 +214,4 @@ These don't have architectural implications today. They're parked here for futur
 
 ---
 
-*Last updated: 2026-05-26*
+*Last updated: 2026-06-04*
