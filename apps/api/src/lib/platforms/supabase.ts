@@ -63,6 +63,8 @@ async function validate(credential: string): Promise<PlatformValidationResult> {
       valid: true,
       identity: {
         name: first?.name ?? undefined,
+        // The orchestrator creates projects under this organization id.
+        organizationId: first?.id ?? undefined,
       },
     };
   } catch (err) {

@@ -72,6 +72,8 @@ async function validate(credential: string): Promise<PlatformValidationResult> {
       identity: {
         name: first?.name ?? undefined,
         email: first?.email ?? undefined,
+        // The orchestrator creates services under this owner id.
+        ownerId: first?.id ?? undefined,
       },
     };
   } catch (err) {

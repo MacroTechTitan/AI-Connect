@@ -2,13 +2,15 @@ import { and, desc, eq } from "drizzle-orm";
 import type { Express, Request, Response } from "express";
 
 import { getDb } from "../db/client.js";
-import { projects } from "../db/schema.js";
-import { logUserAction } from "../lib/logging.js";
+import { platformCredentials, projects } from "../db/schema.js";
+import { runGenesis } from "../lib/genesis/index.js";
+import { logSystem, logUserAction } from "../lib/logging.js";
 import {
   assertOrgAccess,
   orgScopeFilter,
   type AuthedUserContext,
 } from "../lib/orgScope.js";
+import type { Platform } from "../lib/platforms/index.js";
 import { deriveSlugFromText } from "../lib/slug.js";
 import {
   requireAuth,
@@ -262,6 +264,126 @@ async function handleDeleteProject(
   res.status(200).json({ id: removed.id, deleted: true });
 }
 
+const GENESIS_REQUIRED_PLATFORMS: Platform[] = [
+  "vercel",
+  "render",
+  "github",
+  "supabase",
+];
+
+async function handleStartGenesis(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const ctx = getCtx(req);
+  if (!ctx.organizationId) {
+    res.status(400).json({
+      error: "no_organization",
+      reason: "User is not in an organization.",
+    });
+    return;
+  }
+
+  const projectId = req.params.id;
+  if (typeof projectId !== "string" || !UUID_RE.test(projectId)) {
+    res.status(404).json({ error: "project_not_found" });
+    return;
+  }
+
+  const db = getDb();
+
+  const [project] = await db
+    .select({
+      id: projects.id,
+      provisioningState: projects.provisioningState,
+    })
+    .from(projects)
+    .where(and(orgScopeFilter(projects, ctx), eq(projects.id, projectId)))
+    .limit(1);
+
+  if (!project) {
+    res.status(404).json({ error: "project_not_found" });
+    return;
+  }
+
+  // Launchable only from a terminal-but-retryable state. Everything else is a
+  // 409 with a code the frontend can branch on.
+  switch (project.provisioningState) {
+    case "provisioning":
+      res.status(409).json({ error: "already_provisioning" });
+      return;
+    case "provisioned":
+      res.status(409).json({ error: "already_provisioned" });
+      return;
+    case "rolled_back":
+      res.status(409).json({ error: "manual_intervention_required" });
+      return;
+    case "not_started":
+    case "failed":
+      break;
+    default:
+      // Unknown/unexpected state — refuse rather than launch blindly.
+      res.status(409).json({ error: "not_launchable" });
+      return;
+  }
+
+  // The starting user must have all four platform credentials. The orchestrator
+  // re-checks (against the project creator's set) as the authoritative source,
+  // but this gives the caller immediate, specific feedback.
+  const credRows = await db
+    .select({ platform: platformCredentials.platform })
+    .from(platformCredentials)
+    .where(
+      and(
+        orgScopeFilter(platformCredentials, ctx),
+        eq(platformCredentials.userId, ctx.userId),
+      ),
+    );
+  const present = new Set(credRows.map((r) => r.platform));
+  const missing = GENESIS_REQUIRED_PLATFORMS.filter((p) => !present.has(p));
+  if (missing.length > 0) {
+    res.status(400).json({ error: "missing_platform_credentials", missing });
+    return;
+  }
+
+  await db
+    .update(projects)
+    .set({ provisioningState: "provisioning", updatedAt: new Date() })
+    .where(eq(projects.id, projectId));
+
+  await logUserAction(
+    ctx.userId,
+    "start_genesis",
+    "project",
+    projectId,
+    ctx.organizationId,
+    { user_id: ctx.userId },
+  );
+
+  // Detached: the orchestrator runs in the background, reporting progress via
+  // project_provisioning_events rows. Never awaited — the request returns 202
+  // immediately. A crash is logged here; the orchestrator also marks the
+  // project failed internally.
+  void runGenesis(projectId).catch((err) => {
+    void logSystem(
+      "error",
+      "genesis",
+      `Detached runGenesis rejected for project ${projectId}`,
+      {
+        projectId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+    );
+  });
+
+  res.status(202).json({
+    id: projectId,
+    provisioning_state: "provisioning",
+    message:
+      "Genesis started. Subscribe to /api/projects/:id/provisioning-events for progress.",
+  });
+}
+
 export function registerProjectsRoutes(app: Express): void {
   app.post(
     "/api/projects",
@@ -280,5 +402,11 @@ export function registerProjectsRoutes(app: Express): void {
     requireAuth,
     requireHydratedUser,
     handleDeleteProject,
+  );
+  app.post(
+    "/api/projects/:id/genesis",
+    requireAuth,
+    requireHydratedUser,
+    handleStartGenesis,
   );
 }

@@ -45,10 +45,25 @@ export type PlatformActionResult =
   | PlatformCreateResourceResponse
   | PlatformActionError;
 
+// The account identity behind a validated credential. `name`/`email` are
+// human-facing (shown in the settings UI). `ownerId`/`organizationId` are the
+// resource-parent IDs the orchestrator needs to create resources under:
+//   - Render services are created under an account owner (`ownerId`)
+//   - Supabase projects are created under an organization (`organizationId`)
+// The validate() call for those two platforms already fetches the owner/org
+// list, so it exposes the first entry's id here rather than forcing the
+// orchestrator to re-fetch it.
+export interface ValidatedIdentity {
+  name?: string;
+  email?: string;
+  ownerId?: string;
+  organizationId?: string;
+}
+
 export interface PlatformValidationResult {
   valid: boolean;
   errorMessage?: string;
-  identity?: { name?: string; email?: string };
+  identity?: ValidatedIdentity;
 }
 
 export interface PlatformDeleteResult {
