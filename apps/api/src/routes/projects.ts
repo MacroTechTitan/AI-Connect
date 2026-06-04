@@ -1,8 +1,12 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import type { Express, Request, Response } from "express";
 
 import { getDb } from "../db/client.js";
-import { platformCredentials, projects } from "../db/schema.js";
+import {
+  platformCredentials,
+  projectProvisioningEvents,
+  projects,
+} from "../db/schema.js";
 import { runGenesis } from "../lib/genesis/index.js";
 import { logSystem, logUserAction } from "../lib/logging.js";
 import {
@@ -30,6 +34,7 @@ interface ProjectRow {
   name: string;
   slug: string;
   description: string | null;
+  provisioningState: string;
   organizationId: string;
   createdByUserId: string;
   createdAt: Date;
@@ -41,6 +46,7 @@ const projectProjection = {
   name: projects.name,
   slug: projects.slug,
   description: projects.description,
+  provisioningState: projects.provisioningState,
   organizationId: projects.organizationId,
   createdByUserId: projects.createdByUserId,
   createdAt: projects.createdAt,
@@ -58,6 +64,7 @@ function toResponse(p: ProjectRow) {
     name: p.name,
     slug: p.slug,
     description: p.description,
+    provisioning_state: p.provisioningState,
     organization_id: p.organizationId,
     created_by_user_id: p.createdByUserId,
     created_at: p.createdAt,
@@ -384,6 +391,249 @@ async function handleStartGenesis(
   });
 }
 
+// --- SSE: GET /api/projects/:id/provisioning-events ------------------------
+// Tails project_provisioning_events to the browser in real time. Read-only:
+// only the orchestrator writes events. 1-second DB poll (Sprint 6+ may move to
+// LISTEN/NOTIFY). Heartbeats + buffering-defeat headers keep the connection
+// alive through Cloudflare/Render.
+
+const SSE_POLL_MS = 1000;
+const SSE_HEARTBEAT_MS = 15_000;
+const SSE_HARD_TIMEOUT_MS = 15 * 60_000;
+const SSE_MAX_EVENTS = 500;
+// Once a poll requires this many quiet cycles (no row changes) AFTER the project
+// reached a terminal state, we send `done`. The buffer exists because the
+// failure path writes its rollback_summary event AFTER flipping project state,
+// so closing the instant we see a terminal state could drop that final row.
+const SSE_TERMINAL_QUIET_POLLS = 2;
+const SSE_TERMINAL_STATES = new Set(["provisioned", "failed", "rolled_back"]);
+
+const provisioningEventProjection = {
+  id: projectProvisioningEvents.id,
+  projectId: projectProvisioningEvents.projectId,
+  stepName: projectProvisioningEvents.stepName,
+  status: projectProvisioningEvents.status,
+  startedAt: projectProvisioningEvents.startedAt,
+  completedAt: projectProvisioningEvents.completedAt,
+  details: projectProvisioningEvents.details,
+  errorMessage: projectProvisioningEvents.errorMessage,
+  createdAt: projectProvisioningEvents.createdAt,
+} as const;
+
+interface ProvisioningEventRow {
+  id: string;
+  projectId: string;
+  stepName: string;
+  status: string;
+  startedAt: Date | null;
+  completedAt: Date | null;
+  details: unknown;
+  errorMessage: string | null;
+  createdAt: Date;
+}
+
+function toEventResponse(row: ProvisioningEventRow) {
+  return {
+    id: row.id,
+    project_id: row.projectId,
+    step_name: row.stepName,
+    status: row.status,
+    started_at: row.startedAt,
+    completed_at: row.completedAt,
+    details: row.details,
+    error_message: row.errorMessage,
+    created_at: row.createdAt,
+  };
+}
+
+// A row mutates in place (pending → in_progress → terminal). The signature lets
+// the poll re-emit a row when its status/timestamps change rather than only on
+// first sight — event-row ids are random UUIDs, so an id-only cursor wouldn't
+// catch updates and isn't monotonic anyway.
+function eventSignature(row: ProvisioningEventRow): string {
+  return [
+    row.status,
+    row.startedAt?.toISOString() ?? "",
+    row.completedAt?.toISOString() ?? "",
+  ].join("|");
+}
+
+function doneMessage(state: string): string {
+  switch (state) {
+    case "provisioned":
+      return "Project provisioned successfully.";
+    case "rolled_back":
+      return "Provisioning failed; all created resources were rolled back cleanly.";
+    case "failed":
+      return "Provisioning failed. Some resources may require manual cleanup.";
+    default:
+      return "Provisioning finished.";
+  }
+}
+
+async function handleProvisioningEvents(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const ctx = getCtx(req);
+
+  const projectId = req.params.id;
+  if (typeof projectId !== "string" || !UUID_RE.test(projectId)) {
+    res.status(404).json({ error: "project_not_found" });
+    return;
+  }
+
+  const db = getDb();
+
+  const [project] = await db
+    .select({
+      id: projects.id,
+      provisioningState: projects.provisioningState,
+    })
+    .from(projects)
+    .where(and(orgScopeFilter(projects, ctx), eq(projects.id, projectId)))
+    .limit(1);
+
+  if (!project) {
+    res.status(404).json({ error: "project_not_found" });
+    return;
+  }
+
+  // Switch the response into SSE mode. no-transform + X-Accel-Buffering defeat
+  // proxy response buffering (Cloudflare/Render/nginx).
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  res.flushHeaders();
+
+  let closed = false;
+  let lastWriteAt = Date.now();
+  let quietTerminalPolls = 0;
+  // id → last-emitted signature, so we only push a row when something changed.
+  const emittedSignatures = new Map<string, string>();
+  let pollTimer: ReturnType<typeof setTimeout> | undefined;
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let hardTimeoutTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const write = (chunk: string): void => {
+    if (closed) return;
+    res.write(chunk);
+    lastWriteAt = Date.now();
+  };
+  const writeEvent = (event: string, data: unknown): void => {
+    write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  const cleanup = (): void => {
+    if (closed) return;
+    closed = true;
+    if (pollTimer) clearTimeout(pollTimer);
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    if (hardTimeoutTimer) clearTimeout(hardTimeoutTimer);
+  };
+  const endStream = (): void => {
+    if (closed) return;
+    cleanup();
+    res.end();
+  };
+
+  // Client navigated away / closed the tab — stop polling, free the timers.
+  req.on("close", cleanup);
+
+  // Initial snapshot count for the connected event.
+  let eventsSoFar = 0;
+  try {
+    const existing = await db
+      .select({ id: projectProvisioningEvents.id })
+      .from(projectProvisioningEvents)
+      .where(eq(projectProvisioningEvents.projectId, projectId));
+    eventsSoFar = existing.length;
+  } catch {
+    // best-effort; a failed count shouldn't abort the stream
+  }
+  writeEvent("connected", {
+    projectId,
+    provisioningState: project.provisioningState,
+    eventsSoFar,
+  });
+
+  const poll = async (): Promise<void> => {
+    if (closed) return;
+    try {
+      const rows = (await db
+        .select(provisioningEventProjection)
+        .from(projectProvisioningEvents)
+        .where(eq(projectProvisioningEvents.projectId, projectId))
+        .orderBy(
+          asc(projectProvisioningEvents.createdAt),
+          asc(projectProvisioningEvents.id),
+        )
+        .limit(SSE_MAX_EVENTS)) as ProvisioningEventRow[];
+
+      let emitted = 0;
+      for (const row of rows) {
+        const sig = eventSignature(row);
+        if (emittedSignatures.get(row.id) === sig) continue;
+        emittedSignatures.set(row.id, sig);
+        writeEvent("provisioning_event", toEventResponse(row));
+        emitted++;
+      }
+
+      const [current] = await db
+        .select({ provisioningState: projects.provisioningState })
+        .from(projects)
+        .where(eq(projects.id, projectId))
+        .limit(1);
+      const state = current?.provisioningState ?? project.provisioningState;
+
+      if (SSE_TERMINAL_STATES.has(state)) {
+        quietTerminalPolls = emitted > 0 ? 0 : quietTerminalPolls + 1;
+        if (quietTerminalPolls >= SSE_TERMINAL_QUIET_POLLS) {
+          writeEvent("done", {
+            projectId,
+            finalState: state,
+            message: doneMessage(state),
+          });
+          endStream();
+          return;
+        }
+      } else {
+        quietTerminalPolls = 0;
+      }
+    } catch {
+      // Unexpected DB error mid-stream — tell the client and close so it can
+      // re-subscribe rather than hang on a dead connection.
+      writeEvent("error", { reason: "stream_error" });
+      endStream();
+      return;
+    }
+    if (!closed) pollTimer = setTimeout(() => void poll(), SSE_POLL_MS);
+  };
+
+  // Heartbeat comment defeats idle-connection killers (Cloudflare ~100s).
+  heartbeatTimer = setInterval(() => {
+    if (closed) return;
+    if (Date.now() - lastWriteAt >= SSE_HEARTBEAT_MS) {
+      write(": ping\n\n");
+    }
+  }, SSE_HEARTBEAT_MS);
+
+  // Safety valve: a run that somehow outlives the window gets cut loose; the
+  // client can re-subscribe and pick up where it left off (events replay).
+  hardTimeoutTimer = setTimeout(() => {
+    if (closed) return;
+    writeEvent("timeout", {
+      reason: "orchestrator exceeded 15 minute window",
+    });
+    endStream();
+  }, SSE_HARD_TIMEOUT_MS);
+
+  void poll();
+}
+
 export function registerProjectsRoutes(app: Express): void {
   app.post(
     "/api/projects",
@@ -408,5 +658,11 @@ export function registerProjectsRoutes(app: Express): void {
     requireAuth,
     requireHydratedUser,
     handleStartGenesis,
+  );
+  app.get(
+    "/api/projects/:id/provisioning-events",
+    requireAuth,
+    requireHydratedUser,
+    handleProvisioningEvents,
   );
 }

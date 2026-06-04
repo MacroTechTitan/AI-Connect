@@ -2,6 +2,8 @@ import { useAuth0 } from "@auth0/auth0-react";
 import {
   useCallback,
   useEffect,
+  useMemo,
+  useRef,
   useState,
   type FormEvent,
 } from "react";
@@ -94,6 +96,64 @@ async function authedFetch(
   const res = await send(false);
   if (res.status === 401) return send(true);
   return res;
+}
+
+// The native EventSource API can't send an Authorization header, so we can't
+// use it without leaking the JWT into the URL (and server access logs). Instead
+// we open the SSE endpoint with authedFetch, read the response body as a
+// stream, and parse the wire format by hand — preserving the Sprint 1
+// bearer-token model. onEvent fires once per complete `event:/data:` block;
+// `: ping` heartbeat comment lines are ignored. Resolves when the stream ends
+// or the AbortSignal fires.
+async function streamSse(
+  path: string,
+  getAccessTokenSilently: GetAccessToken,
+  onEvent: (event: string, data: string) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const res = await authedFetch(
+    path,
+    { headers: { Accept: "text/event-stream" }, signal },
+    getAccessTokenSilently,
+  );
+  if (!res.ok || !res.body) {
+    throw new Error(`sse_failed_${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  const flushBlock = (block: string) => {
+    let event = "message";
+    const dataLines: string[] = [];
+    for (const line of block.split("\n")) {
+      if (line === "" || line.startsWith(":")) continue; // blank / heartbeat
+      if (line.startsWith("event:")) {
+        event = line.slice("event:".length).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice("data:".length).replace(/^ /, ""));
+      }
+    }
+    if (dataLines.length > 0) onEvent(event, dataLines.join("\n"));
+  };
+
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      // Normalize CRLF so the \n\n block split works regardless of proxy.
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary !== -1) {
+        flushBlock(buffer.slice(0, boundary));
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
 }
 
 // Inline recovery UI rendered by any component that catches a
@@ -631,11 +691,314 @@ function KeysPanel({
   );
 }
 
+type ProvisioningState =
+  | "not_started"
+  | "provisioning"
+  | "provisioned"
+  | "failed"
+  | "rolled_back";
+
+const PROVISIONING_BADGE: Record<
+  ProvisioningState,
+  { label: string; cls: string }
+> = {
+  not_started: { label: "Not provisioned", cls: "badge-muted" },
+  provisioning: { label: "Provisioning…", cls: "badge-active" },
+  provisioned: { label: "Provisioned", cls: "badge-success" },
+  failed: { label: "Failed", cls: "badge-error" },
+  rolled_back: { label: "Rolled back", cls: "badge-muted" },
+};
+
+// Provision is offered only from terminal-but-retryable states.
+const PROVISIONABLE = new Set<string>(["not_started", "failed", "rolled_back"]);
+
+function badgeFor(state: string): { label: string; cls: string } {
+  return (
+    PROVISIONING_BADGE[state as ProvisioningState] ?? {
+      label: state,
+      cls: "badge-muted",
+    }
+  );
+}
+
+interface ProvisioningEvent {
+  id: string;
+  project_id: string;
+  step_name: string;
+  status: string;
+  started_at: string | null;
+  completed_at: string | null;
+  details: Record<string, unknown> | null;
+  error_message: string | null;
+  created_at: string;
+}
+
+const STEP_LABEL: Record<string, string> = {
+  create_github_repo: "Create GitHub repo",
+  create_supabase_project: "Create Supabase project",
+  create_vercel_project: "Create Vercel project",
+  create_render_service: "Create Render service",
+  wire_github_to_render: "Wire GitHub to Render",
+  inject_env_vars: "Inject env vars",
+  verify_deployment: "Verify deployment",
+  validate_credentials: "Validate credentials",
+  rollback_summary: "Rollback summary",
+  orchestrator: "Orchestrator",
+};
+
+function humanizeStep(stepName: string): string {
+  if (stepName.startsWith("rollback:")) {
+    return `Roll back: ${humanizeStep(stepName.slice("rollback:".length))}`;
+  }
+  const known = STEP_LABEL[stepName];
+  if (known) return known;
+  return (
+    stepName.charAt(0).toUpperCase() + stepName.slice(1).replace(/_/g, " ")
+  );
+}
+
+const STATUS_ICON: Record<
+  string,
+  { icon: string; cls: string; spin?: boolean }
+> = {
+  pending: { icon: "○", cls: "step-pending" },
+  in_progress: { icon: "◐", cls: "step-active", spin: true },
+  succeeded: { icon: "●", cls: "step-success" },
+  failed: { icon: "●", cls: "step-error" },
+  failed_to_rollback: { icon: "●", cls: "step-warn" },
+  rolled_back: { icon: "●", cls: "step-muted" },
+};
+
+function formatElapsed(
+  startedAt: string | null,
+  completedAt: string | null,
+  nowTs: number,
+): string | null {
+  if (!startedAt) return null;
+  const start = new Date(startedAt).getTime();
+  if (Number.isNaN(start)) return null;
+  const end = completedAt ? new Date(completedAt).getTime() : nowTs;
+  const ms = Math.max(0, end - start);
+  if (ms < 1000) return `${ms} ms`;
+  return `${(ms / 1000).toFixed(1)} s`;
+}
+
+// Pick the human-useful bits out of an event's details jsonb: links to created
+// resources, the manual-cleanup link on a failed rollback, and free-text notes.
+function detailItems(
+  details: Record<string, unknown> | null,
+): Array<{ key: string; text: string; href?: string }> {
+  if (!details) return [];
+  const items: Array<{ key: string; text: string; href?: string }> = [];
+  const urlKeys: Array<[string, string]> = [
+    ["url", "URL"],
+    ["production_url", "Production"],
+    ["html_url", "Repo"],
+    ["dashboard_url", "Dashboard"],
+    ["api_url", "API"],
+    ["manual_cleanup_url", "Manual cleanup"],
+  ];
+  for (const [key, label] of urlKeys) {
+    const value = details[key];
+    if (typeof value === "string" && value.startsWith("http")) {
+      items.push({ key, text: label, href: value });
+    }
+  }
+  if (typeof details.note === "string") {
+    items.push({ key: "note", text: details.note });
+  }
+  if (typeof details.message === "string") {
+    items.push({ key: "message", text: details.message });
+  }
+  return items;
+}
+
+// Subscribes to the genesis SSE stream and renders each step as it lands.
+// Mounts when the user provisions a project (or re-opens an in-flight run).
+function GenesisProgress({
+  projectId,
+  getAccessTokenSilently,
+  onComplete,
+}: {
+  projectId: string;
+  getAccessTokenSilently: GetAccessToken;
+  onComplete: (finalState: string) => void;
+}) {
+  const [events, setEvents] = useState<Map<string, ProvisioningEvent>>(
+    () => new Map(),
+  );
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [finalState, setFinalState] = useState<string | null>(null);
+  const [nowTs, setNowTs] = useState(() => Date.now());
+
+  // Keep the latest onComplete without making it an effect dependency (which
+  // would tear down and re-open the stream on every parent render).
+  const onCompleteRef = useRef(onComplete);
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let done = false;
+    void (async () => {
+      try {
+        await streamSse(
+          `/api/projects/${projectId}/provisioning-events`,
+          getAccessTokenSilently,
+          (event, data) => {
+            if (event === "provisioning_event") {
+              let parsed: ProvisioningEvent;
+              try {
+                parsed = JSON.parse(data) as ProvisioningEvent;
+              } catch {
+                return;
+              }
+              setEvents((prev) => {
+                const next = new Map(prev);
+                next.set(parsed.id, parsed);
+                return next;
+              });
+            } else if (event === "done") {
+              done = true;
+              let fs = "";
+              try {
+                fs = (JSON.parse(data) as { finalState?: string }).finalState ??
+                  "";
+              } catch {
+                // keep fs empty
+              }
+              if (fs) {
+                setFinalState(fs);
+                onCompleteRef.current(fs);
+              }
+              controller.abort();
+            } else if (event === "timeout") {
+              setStreamError(
+                "Provisioning is taking longer than expected. Refresh to re-check status.",
+              );
+            } else if (event === "error") {
+              setStreamError("Lost the progress stream. Refresh to reconnect.");
+            }
+            // "connected" — nothing to render
+          },
+          controller.signal,
+        );
+      } catch (err) {
+        if (controller.signal.aborted) return; // unmounted or done
+        if (isSessionExpired(err)) {
+          setSessionExpired(true);
+          return;
+        }
+        if (!done) {
+          setStreamError("Couldn't open the progress stream. Refresh to retry.");
+        }
+      }
+    })();
+    return () => controller.abort();
+  }, [projectId, getAccessTokenSilently]);
+
+  // Live elapsed ticker — only runs while a step is actively in progress.
+  const hasActive = useMemo(() => {
+    if (finalState) return false;
+    for (const e of events.values()) {
+      if (e.status === "in_progress") return true;
+    }
+    return false;
+  }, [events, finalState]);
+  useEffect(() => {
+    if (!hasActive) return;
+    const t = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [hasActive]);
+
+  const ordered = useMemo(
+    () =>
+      [...events.values()].sort((a, b) => {
+        const byTime = a.created_at.localeCompare(b.created_at);
+        return byTime !== 0 ? byTime : a.id.localeCompare(b.id);
+      }),
+    [events],
+  );
+
+  if (sessionExpired) {
+    return (
+      <div className="genesis-progress">
+        <SessionExpiredNotice />
+      </div>
+    );
+  }
+
+  return (
+    <div className="genesis-progress">
+      {ordered.length === 0 && !streamError ? (
+        <p className="muted">Starting provisioning…</p>
+      ) : null}
+      {ordered.length > 0 ? (
+        <ul className="genesis-steps">
+          {ordered.map((e) => {
+            const icon: { icon: string; cls: string; spin?: boolean } =
+              STATUS_ICON[e.status] ?? { icon: "○", cls: "step-pending" };
+            const elapsed = formatElapsed(e.started_at, e.completed_at, nowTs);
+            const items = detailItems(e.details);
+            return (
+              <li key={e.id} className="genesis-step">
+                <span
+                  className={`step-icon ${icon.cls}${
+                    icon.spin ? " step-spin" : ""
+                  }`}
+                  aria-hidden="true"
+                >
+                  {icon.icon}
+                </span>
+                <div className="step-body">
+                  <div className="step-head">
+                    <span className="step-name">
+                      {humanizeStep(e.step_name)}
+                    </span>
+                    {elapsed ? (
+                      <span className="step-elapsed">{elapsed}</span>
+                    ) : null}
+                  </div>
+                  {items.length > 0 ? (
+                    <div className="step-details">
+                      {items.map((it) =>
+                        it.href ? (
+                          <a
+                            key={it.key}
+                            href={it.href}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {it.text} ↗
+                          </a>
+                        ) : (
+                          <span key={it.key}>{it.text}</span>
+                        ),
+                      )}
+                    </div>
+                  ) : null}
+                  {e.error_message ? (
+                    <div className="step-error">{e.error_message}</div>
+                  ) : null}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+      {streamError ? <p className="error">{streamError}</p> : null}
+    </div>
+  );
+}
+
 interface ProjectRow {
   id: string;
   name: string;
   slug: string;
   description: string | null;
+  provisioning_state: ProvisioningState;
   organization_id: string;
   created_by_user_id: string;
   created_at: string;
@@ -655,6 +1018,28 @@ function ProjectsPanel({
   const [addDescription, setAddDescription] = useState("");
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+
+  // Per-project genesis UI state, keyed by project id.
+  const [progressOpen, setProgressOpen] = useState<Record<string, boolean>>({});
+  const [provisionError, setProvisionError] = useState<
+    Record<string, string>
+  >({});
+  const [provisioningBusy, setProvisioningBusy] = useState<
+    Record<string, boolean>
+  >({});
+
+  const setProjectState = useCallback(
+    (id: string, state: ProvisioningState) => {
+      setProjects((prev) =>
+        prev
+          ? prev.map((p) =>
+              p.id === id ? { ...p, provisioning_state: state } : p,
+            )
+          : prev,
+      );
+    },
+    [],
+  );
 
   const refresh = useCallback(async () => {
     setListError(null);
@@ -772,6 +1157,84 @@ function ProjectsPanel({
     }
   }
 
+  function setProvisionErr(id: string, msg: string) {
+    setProvisionError((prev) => ({ ...prev, [id]: msg }));
+  }
+  function openProgress(id: string) {
+    setProgressOpen((prev) => ({ ...prev, [id]: true }));
+  }
+
+  async function handleProvision(id: string) {
+    setProvisionError((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setProvisioningBusy((prev) => ({ ...prev, [id]: true }));
+    try {
+      const res = await authedFetch(
+        `/api/projects/${id}/genesis`,
+        { method: "POST" },
+        getAccessTokenSilently,
+      );
+
+      if (res.status === 202) {
+        setProjectState(id, "provisioning");
+        openProgress(id);
+        return;
+      }
+
+      let body: { error?: string; missing?: string[] } = {};
+      try {
+        body = (await res.json()) as { error?: string; missing?: string[] };
+      } catch {
+        // non-JSON; fall through to status-based handling
+      }
+
+      if (res.status === 409) {
+        if (body.error === "already_provisioning") {
+          // Likely a refresh of an in-flight run — just attach the stream.
+          setProjectState(id, "provisioning");
+          openProgress(id);
+          return;
+        }
+        setProvisionErr(
+          id,
+          body.error === "already_provisioned"
+            ? "This project is already provisioned."
+            : "This project needs manual cleanup before it can be provisioned again.",
+        );
+        return;
+      }
+
+      if (res.status === 400 && body.error === "missing_platform_credentials") {
+        const missing = (body.missing ?? [])
+          .map((p) => PLATFORM_LABEL[p as Platform] ?? p)
+          .join(", ");
+        setProvisionErr(
+          id,
+          `Add hosting connections first — missing: ${missing || "credentials"}. See "Hosting connections" below.`,
+        );
+        return;
+      }
+
+      setProvisionErr(
+        id,
+        res.status >= 500
+          ? "Something went wrong on our end. Try again in a moment."
+          : (body.error ?? "Couldn't start provisioning."),
+      );
+    } catch (err) {
+      if (isSessionExpired(err)) {
+        setSessionExpired(true);
+        return;
+      }
+      setProvisionErr(id, "Couldn't reach the server. Try again.");
+    } finally {
+      setProvisioningBusy((prev) => ({ ...prev, [id]: false }));
+    }
+  }
+
   if (sessionExpired) {
     return (
       <div className="settings-subsection">
@@ -793,24 +1256,57 @@ function ProjectsPanel({
       ) : null}
       {projects && projects.length > 0 ? (
         <ul className="projects-list">
-          {projects.map((p) => (
-            <li key={p.id} className="project-row">
-              <div className="project-info">
-                <div className="project-name">{p.name}</div>
-                <div className="project-slug">{p.slug}</div>
-                {p.description ? (
-                  <div className="project-description">{p.description}</div>
-                ) : null}
-              </div>
-              <button
-                type="button"
-                className="btn-danger"
-                onClick={() => void handleDelete(p.id)}
-              >
-                Delete
-              </button>
-            </li>
-          ))}
+          {projects.map((p) => {
+            const badge = badgeFor(p.provisioning_state);
+            const canProvision =
+              PROVISIONABLE.has(p.provisioning_state) &&
+              !provisioningBusy[p.id];
+            return (
+              <li key={p.id} className="project-row">
+                <div className="project-info">
+                  <div className="project-name">
+                    {p.name}
+                    <span className={`genesis-badge ${badge.cls}`}>
+                      {badge.label}
+                    </span>
+                  </div>
+                  <div className="project-slug">{p.slug}</div>
+                  {p.description ? (
+                    <div className="project-description">{p.description}</div>
+                  ) : null}
+                  {provisionError[p.id] ? (
+                    <div className="error">{provisionError[p.id]}</div>
+                  ) : null}
+                  {progressOpen[p.id] ? (
+                    <GenesisProgress
+                      projectId={p.id}
+                      getAccessTokenSilently={getAccessTokenSilently}
+                      onComplete={(fs) =>
+                        setProjectState(p.id, fs as ProvisioningState)
+                      }
+                    />
+                  ) : null}
+                </div>
+                <div className="project-actions">
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    disabled={!canProvision}
+                    onClick={() => void handleProvision(p.id)}
+                  >
+                    {provisioningBusy[p.id] ? "Starting…" : "Provision"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-danger"
+                    onClick={() => void handleDelete(p.id)}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
 
