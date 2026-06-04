@@ -426,7 +426,7 @@ export const projectProvisioningEvents = pgTable(
   (table) => ({
     statusCheck: check(
       "project_provisioning_events_status_check",
-      sql`${table.status} IN ('pending', 'in_progress', 'succeeded', 'failed', 'rolled_back')`,
+      sql`${table.status} IN ('pending', 'in_progress', 'succeeded', 'failed', 'rolled_back', 'failed_to_rollback')`,
     ),
     projectIdCreatedAtIdx: index(
       "idx_project_provisioning_events_project_id_created_at",

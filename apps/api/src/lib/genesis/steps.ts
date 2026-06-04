@@ -68,6 +68,8 @@ export async function createGithubRepo(
       return {
         status: "succeeded",
         resourceId: result.resourceId,
+        platform: "github",
+        rollbackable: true,
         details: {
           full_name: result.resourceId,
           html_url: result.urls.html ?? "",
@@ -124,6 +126,8 @@ export async function createSupabaseProject(
     return {
       status: "succeeded",
       resourceId: result.resourceId,
+      platform: "supabase",
+      rollbackable: true,
       details: {
         id: result.resourceId,
         dashboard_url: result.urls.dashboard ?? "",
@@ -160,6 +164,8 @@ export async function createVercelProject(
     return {
       status: "succeeded",
       resourceId: result.resourceId,
+      platform: "vercel",
+      rollbackable: true,
       details: {
         id: result.resourceId,
         dashboard_url: result.urls.dashboard ?? "",
@@ -206,6 +212,8 @@ export async function createRenderService(
     return {
       status: "succeeded",
       resourceId: result.resourceId,
+      platform: "render",
+      rollbackable: true,
       details: {
         id: result.resourceId,
         // The deployed service URL — verify_deployment polls this.
@@ -229,6 +237,8 @@ export async function wireGithubToRender(
 ): Promise<GenesisStepResult> {
   return {
     status: "succeeded",
+    // Created nothing, so there is nothing to undo on rollback.
+    rollbackable: false,
     details: { note: "auto-wired by Render at service creation time" },
   };
 }
@@ -242,6 +252,8 @@ export async function injectEnvVars(
 ): Promise<GenesisStepResult> {
   return {
     status: "succeeded",
+    // Created nothing, so there is nothing to undo on rollback.
+    rollbackable: false,
     details: {
       note: "env var injection deferred to Sprint 5 (DNS + Auth0 wiring)",
     },
@@ -279,6 +291,8 @@ export async function verifyDeployment(
       if (res.status === 200) {
         return {
           status: "succeeded",
+          // Read-only probe — nothing was created, nothing to roll back.
+          rollbackable: false,
           details: {
             url,
             statusCode: 200,

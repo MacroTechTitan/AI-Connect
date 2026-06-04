@@ -17,11 +17,18 @@ export type GenesisStepName =
 // into a project_provisioning_events row. `details` is persisted as the event
 // row's jsonb; `resourceId` (the created platform resource's id) is folded into
 // that jsonb because the events table has no dedicated column for it.
+//
+// `platform` + `rollbackable` drive 5b rollback: when a later step fails, the
+// orchestrator walks successful steps in reverse and deletes each one's
+// `resourceId` via that `platform`'s client. `rollbackable` is false for steps
+// that created nothing to undo (the wire/inject no-ops, the read-only verify).
 export interface GenesisStepResult {
   status: "succeeded" | "failed";
   details?: Record<string, unknown>;
   errorMessage?: string;
   resourceId?: string;
+  platform?: Platform;
+  rollbackable?: boolean;
 }
 
 export interface GenesisStep {

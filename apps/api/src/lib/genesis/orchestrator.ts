@@ -14,7 +14,11 @@ import {
 } from "../platforms/index.js";
 import * as vault from "../vault.js";
 import { GENESIS_STEPS } from "./steps.js";
-import type { GenesisContext } from "./types.js";
+import type {
+  GenesisContext,
+  GenesisStepName,
+  GenesisStepResult,
+} from "./types.js";
 
 type Db = ReturnType<typeof getDb>;
 
@@ -97,7 +101,7 @@ async function markFailed(
 async function setProjectState(
   db: Db,
   projectId: string,
-  state: "provisioned" | "failed",
+  state: "provisioned" | "failed" | "rolled_back",
 ): Promise<void> {
   await db
     .update(projects)
@@ -117,6 +121,162 @@ async function recordFailureEvent(
   const eventId = await insertPendingEvent(db, projectId, stepName);
   await markInProgress(db, eventId);
   await markFailed(db, eventId, errorMessage, details);
+}
+
+// Rollback events reuse the pending → in_progress lifecycle, then land on one
+// of two terminal states distinct from forward steps' succeeded/failed:
+//   - succeeded            → the resource was deleted cleanly
+//   - failed_to_rollback   → the delete itself failed; the resource still
+//                            exists and needs manual cleanup (link in details)
+async function markRollbackSucceeded(
+  db: Db,
+  eventId: string,
+  details: Record<string, unknown>,
+): Promise<void> {
+  await db
+    .update(projectProvisioningEvents)
+    .set({ status: "succeeded", completedAt: new Date(), details })
+    .where(eq(projectProvisioningEvents.id, eventId));
+}
+
+async function markFailedToRollback(
+  db: Db,
+  eventId: string,
+  errorMessage: string,
+  details: Record<string, unknown>,
+): Promise<void> {
+  await db
+    .update(projectProvisioningEvents)
+    .set({
+      status: "failed_to_rollback",
+      completedAt: new Date(),
+      errorMessage,
+      details,
+    })
+    .where(eq(projectProvisioningEvents.id, eventId));
+}
+
+// Best-effort deep link to the platform's resource page so a human can finish a
+// cleanup the API couldn't. Stored in the rollback event's details for the SSE
+// consumer (5c) / future "stuck genesis" UI to surface as a clickable link.
+function manualCleanupUrl(
+  platform: Platform,
+  result: GenesisStepResult,
+): string | undefined {
+  const resourceId = result.resourceId;
+  const details = result.details ?? {};
+  switch (platform) {
+    case "github": {
+      // resourceId is the repo full_name (owner/repo).
+      const fullName =
+        typeof details.full_name === "string" ? details.full_name : resourceId;
+      return fullName ? `https://github.com/${fullName}/settings` : undefined;
+    }
+    case "render":
+      return resourceId
+        ? `https://dashboard.render.com/services/${resourceId}`
+        : undefined;
+    case "supabase":
+      return resourceId
+        ? `https://supabase.com/dashboard/project/${resourceId}`
+        : undefined;
+    case "vercel": {
+      // We can only build the per-project settings URL when the create step
+      // resolved a real project dashboard URL (it needs the account username).
+      // Otherwise fall back to the generic dashboard.
+      const dash =
+        typeof details.dashboard_url === "string" ? details.dashboard_url : "";
+      if (dash && dash !== "https://vercel.com/dashboard") {
+        return `${dash}/settings`;
+      }
+      return "https://vercel.com/dashboard";
+    }
+  }
+}
+
+// Reverse-order, best-effort teardown of everything the run created before the
+// failed step. Walks GENESIS_STEPS backwards from just before the failed step,
+// deleting each rollbackable success via its platform client. Most-recent-first
+// matters: downstream resources (Render service) reference upstream ones (the
+// GitHub repo), so deleting upstream first would orphan them.
+//
+// Each delete writes its own event row (step_name="rollback:<original>"); the
+// original step's succeeded row is left untouched. Deletion failures are soft —
+// recorded as failed_to_rollback and counted, never thrown.
+async function rollback(
+  db: Db,
+  ctx: GenesisContext,
+  failedStepName: GenesisStepName,
+): Promise<{ rolledBackCount: number; failedToRollbackCount: number }> {
+  let rolledBackCount = 0;
+  let failedToRollbackCount = 0;
+
+  const failedIdx = GENESIS_STEPS.findIndex((s) => s.name === failedStepName);
+
+  for (let i = failedIdx - 1; i >= 0; i--) {
+    const step = GENESIS_STEPS[i]!;
+    const result = ctx.results[step.name];
+
+    // Only undo steps that actually created a concrete, deletable resource.
+    if (
+      !result ||
+      result.status !== "succeeded" ||
+      !result.rollbackable ||
+      !result.platform ||
+      !result.resourceId
+    ) {
+      continue;
+    }
+
+    const platform = result.platform;
+    const resourceId = result.resourceId;
+
+    const eventId = await insertPendingEvent(
+      db,
+      ctx.projectId,
+      `rollback:${step.name}`,
+    );
+    await markInProgress(db, eventId);
+
+    let deleteResult;
+    try {
+      deleteResult = await getPlatformClient(platform).deleteResource(
+        ctx.credentials[platform],
+        resourceId,
+      );
+    } catch (err) {
+      deleteResult = {
+        deleted: false,
+        errorMessage: `Unexpected error deleting ${platform} resource: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      };
+    }
+
+    if (deleteResult.deleted) {
+      await markRollbackSucceeded(db, eventId, {
+        resourceId,
+        deletedResource: platform,
+      });
+      rolledBackCount++;
+    } else {
+      const cleanupUrl = manualCleanupUrl(platform, result);
+      await markFailedToRollback(
+        db,
+        eventId,
+        deleteResult.errorMessage ??
+          `${platform} refused to delete resource ${resourceId}.`,
+        {
+          resourceId,
+          platform,
+          ...(cleanupUrl ? { manual_cleanup_url: cleanupUrl } : {}),
+        },
+      );
+      failedToRollbackCount++;
+    }
+  }
+
+  return { rolledBackCount, failedToRollbackCount };
 }
 
 // --- context assembly ------------------------------------------------------
@@ -226,9 +386,11 @@ async function buildContext(
 
 // --- the run ----------------------------------------------------------------
 
-// Walks the seven steps in order. On the first failure: marks the project
-// failed and STOPS (sub-commit 5b replaces this stop with reverse-delete
-// rollback). On all seven succeeding: marks the project provisioned.
+// Walks the seven steps in order. On the first failure: rolls back everything
+// created so far (reverse-delete, best-effort) and lands the project in a
+// terminal state — 'rolled_back' if cleanup was clean, 'failed' if any resource
+// resisted deletion and needs manual cleanup. On all seven succeeding: marks
+// the project provisioned.
 async function runSteps(db: Db, ctx: GenesisContext): Promise<void> {
   for (const step of GENESIS_STEPS) {
     const eventId = await insertPendingEvent(db, ctx.projectId, step.name);
@@ -259,14 +421,60 @@ async function runSteps(db: Db, ctx: GenesisContext): Promise<void> {
       result.errorMessage ?? "Step failed without an error message.",
       result.details,
     );
-    await setProjectState(db, ctx.projectId, "failed");
     await logSystem(
       "warn",
       "genesis",
-      `Genesis stopped: step ${step.name} failed for project ${ctx.projectId}`,
+      `Genesis step ${step.name} failed for project ${ctx.projectId}; rolling back`,
       { projectId: ctx.projectId, step: step.name },
     );
-    return; // STOP — rollback deferred to sub-commit 5b.
+
+    const { rolledBackCount, failedToRollbackCount } = await rollback(
+      db,
+      ctx,
+      step.name,
+    );
+    const clean = failedToRollbackCount === 0;
+
+    // Clean rollback → 'rolled_back' (terminal, no action needed). Partial →
+    // 'failed' so the user sees they still have manual cleanup to do.
+    await setProjectState(db, ctx.projectId, clean ? "rolled_back" : "failed");
+
+    const message = clean
+      ? `Rolled back ${rolledBackCount} resource(s) cleanly after step ${step.name} failed.`
+      : `Rolled back ${rolledBackCount} resource(s) after step ${step.name} failed; ${failedToRollbackCount} require manual cleanup.`;
+
+    const summaryEventId = await insertPendingEvent(
+      db,
+      ctx.projectId,
+      "rollback_summary",
+    );
+    await markInProgress(db, summaryEventId);
+    if (clean) {
+      await markRollbackSucceeded(db, summaryEventId, {
+        rolledBackCount,
+        failedToRollbackCount,
+        message,
+      });
+    } else {
+      await markFailedToRollback(db, summaryEventId, message, {
+        rolledBackCount,
+        failedToRollbackCount,
+        message,
+      });
+    }
+
+    await logSystem(
+      clean ? "warn" : "error",
+      "genesis",
+      message,
+      {
+        projectId: ctx.projectId,
+        step: step.name,
+        rolledBackCount,
+        failedToRollbackCount,
+      },
+    );
+    return; // STOP — terminal state reached.
   }
 
   await setProjectState(db, ctx.projectId, "provisioned");

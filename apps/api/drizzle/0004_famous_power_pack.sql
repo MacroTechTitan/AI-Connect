@@ -1,0 +1,2 @@
+ALTER TABLE "project_provisioning_events" DROP CONSTRAINT "project_provisioning_events_status_check";--> statement-breakpoint
+ALTER TABLE "project_provisioning_events" ADD CONSTRAINT "project_provisioning_events_status_check" CHECK ("project_provisioning_events"."status" IN ('pending', 'in_progress', 'succeeded', 'failed', 'rolled_back', 'failed_to_rollback'));
