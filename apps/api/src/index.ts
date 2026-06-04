@@ -6,6 +6,7 @@ import { seedAdmin } from "./lib/seed.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerKeysRoutes } from "./routes/keys.js";
 import { registerMeRoutes } from "./routes/me.js";
+import { registerPlatformCredentialsRoutes } from "./routes/platformCredentials.js";
 import { registerProjectsRoutes } from "./routes/projects.js";
 import { registerPromptRoutes } from "./routes/prompt.js";
 
@@ -75,6 +76,10 @@ registerPromptRoutes(app);
 
 // /api/projects — Auth0 JWT-gated CRUD for org-scoped projects.
 registerProjectsRoutes(app);
+
+// /api/platform-credentials — Auth0 JWT-gated CRUD for hosting platform
+// credentials (Vercel/Render/GitHub/Supabase). Secrets live in Supabase Vault.
+registerPlatformCredentialsRoutes(app);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "not_found" });
