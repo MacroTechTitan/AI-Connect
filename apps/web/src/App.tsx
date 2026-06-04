@@ -8,6 +8,7 @@ import {
 
 type HealthStatus = "pending" | "ok" | "down";
 type Provider = "anthropic" | "openai" | "ollama";
+type Platform = "vercel" | "render" | "github" | "supabase";
 
 const HEALTH_URL = "https://api.aiconnect.macrotechtitan.com/health";
 const API_BASE = import.meta.env.VITE_API_BASE_URL;
@@ -24,6 +25,29 @@ const KEY_PLACEHOLDER: Record<Provider, string> = {
   anthropic: "sk-ant-...",
   openai: "sk-...",
   ollama: "http://localhost:11434",
+};
+
+const PLATFORM_LABEL: Record<Platform, string> = {
+  vercel: "Vercel",
+  render: "Render",
+  github: "GitHub",
+  supabase: "Supabase",
+};
+
+const PLATFORM_LABEL_PLACEHOLDER: Record<Platform, string> = {
+  vercel: "e.g. Personal Vercel",
+  render: "e.g. Personal Render",
+  github: "e.g. Personal GitHub",
+  supabase: "e.g. Personal Supabase",
+};
+
+const PLATFORM_TOKEN_PLACEHOLDER: Record<Platform, string> = {
+  vercel: "Personal access token from vercel.com/account/tokens",
+  github:
+    "Personal access token (classic) with repo + delete_repo + admin:repo_hook scopes",
+  render: "API key from render.com/u/settings#api-keys",
+  supabase:
+    "Personal access token from supabase.com/dashboard/account/tokens",
 };
 
 type GetAccessToken = (opts?: { cacheMode?: "off" }) => Promise<string>;
@@ -94,6 +118,302 @@ function SessionExpiredNotice() {
 function formatCost(cost: number | null | undefined): string {
   if (cost === null || cost === undefined) return "—";
   return `$${cost.toFixed(4)}`;
+}
+
+interface CredentialIdentity {
+  name?: string;
+  email?: string;
+}
+
+interface PlatformCredentialRow {
+  id: string;
+  platform: Platform;
+  label: string;
+  created_at: string;
+  last_used_at: string | null;
+  last_validated_at: string | null;
+}
+
+// Friendly relative-time formatter for "Last validated: 5 minutes ago".
+// Keeps the UI text-driven without pulling in a date library.
+function formatRelativeTime(iso: string | null | undefined): string {
+  if (!iso) return "never";
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "unknown";
+  const diff = Date.now() - then;
+  if (diff < 60_000) return "just now";
+  const min = Math.floor(diff / 60_000);
+  if (min < 60) return `${min} minute${min === 1 ? "" : "s"} ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr} hour${hr === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hr / 24);
+  if (days < 30) return `${days} day${days === 1 ? "" : "s"} ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+function describeIdentity(
+  identity: CredentialIdentity | undefined,
+): string | null {
+  if (!identity) return null;
+  const { name, email } = identity;
+  if (name && email) return `as ${name} (${email})`;
+  if (name) return `as ${name}`;
+  if (email) return `as ${email}`;
+  return null;
+}
+
+function PlatformCredentialsPanel({
+  getAccessTokenSilently,
+}: {
+  getAccessTokenSilently: GetAccessToken;
+}) {
+  const [credentials, setCredentials] = useState<
+    PlatformCredentialRow[] | null
+  >(null);
+  // Identity is returned by POST but not by GET (Sprint 4 only persists the
+  // metadata; identity may move to the DB in a later sprint). We keep a
+  // per-session map keyed by credential id so freshly-added rows show
+  // identity confirmation until reload.
+  const [identities, setIdentities] = useState<
+    Record<string, CredentialIdentity>
+  >({});
+  const [listError, setListError] = useState<string | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+
+  const [addPlatform, setAddPlatform] = useState<Platform>("github");
+  const [addLabel, setAddLabel] = useState("");
+  const [addCredential, setAddCredential] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setListError(null);
+    setCredentials(null);
+    try {
+      const res = await authedFetch(
+        "/api/platform-credentials",
+        {},
+        getAccessTokenSilently,
+      );
+      if (!res.ok) {
+        setListError(
+          res.status >= 500
+            ? "Something went wrong on our end. Try again in a moment."
+            : "Couldn't load connections.",
+        );
+        setCredentials([]);
+        return;
+      }
+      const body = (await res.json()) as {
+        credentials?: PlatformCredentialRow[];
+      };
+      setCredentials(body.credentials ?? []);
+    } catch (err) {
+      if (isSessionExpired(err)) {
+        setSessionExpired(true);
+        return;
+      }
+      setListError("Couldn't reach the server. Try again.");
+      setCredentials([]);
+    }
+  }, [getAccessTokenSilently]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function handleAdd(e: FormEvent) {
+    e.preventDefault();
+    setAddError(null);
+    setAdding(true);
+    try {
+      const res = await authedFetch(
+        "/api/platform-credentials",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            platform: addPlatform,
+            label: addLabel,
+            credential: addCredential,
+          }),
+        },
+        getAccessTokenSilently,
+      );
+      if (!res.ok) {
+        let msg =
+          res.status >= 500
+            ? "Something went wrong on our end. Try again in a moment."
+            : "Please check your input.";
+        try {
+          const body = (await res.json()) as {
+            error?: string;
+            reason?: string;
+          };
+          if (body?.error === "credential_invalid") {
+            // Surface the platform's own error message — the whole point of
+            // server-side validation at registration time.
+            msg =
+              body.reason ??
+              `${PLATFORM_LABEL[addPlatform]} rejected the token.`;
+          } else if (body?.reason) {
+            msg = body.reason;
+          } else if (body?.error) {
+            msg = body.error;
+          }
+        } catch {
+          // body wasn't JSON; keep the status-derived message
+        }
+        setAddError(msg);
+        return;
+      }
+      const body = (await res.json()) as PlatformCredentialRow & {
+        identity?: CredentialIdentity;
+      };
+      if (body.identity) {
+        const newIdentity = body.identity;
+        setIdentities((prev) => ({ ...prev, [body.id]: newIdentity }));
+      }
+      setAddLabel("");
+      setAddCredential("");
+      await refresh();
+    } catch (err) {
+      if (isSessionExpired(err)) {
+        setSessionExpired(true);
+        return;
+      }
+      setAddError("Couldn't reach the server. Try again.");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    try {
+      const res = await authedFetch(
+        `/api/platform-credentials/${id}`,
+        { method: "DELETE" },
+        getAccessTokenSilently,
+      );
+      if (!res.ok) {
+        setListError(
+          res.status >= 500
+            ? "Something went wrong on our end. Try again in a moment."
+            : "Couldn't remove that connection.",
+        );
+        return;
+      }
+      setIdentities((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      await refresh();
+    } catch (err) {
+      if (isSessionExpired(err)) {
+        setSessionExpired(true);
+        return;
+      }
+      setListError("Couldn't reach the server. Try again.");
+    }
+  }
+
+  if (sessionExpired) {
+    return (
+      <div className="settings-subsection">
+        <h3>Hosting connections</h3>
+        <SessionExpiredNotice />
+      </div>
+    );
+  }
+
+  return (
+    <div className="settings-subsection">
+      <h3>Hosting connections</h3>
+      <p className="muted">
+        Connect your hosting platforms so AI Connect can provision new
+        projects on your behalf.
+      </p>
+      {credentials === null && !listError ? (
+        <p className="muted">Loading…</p>
+      ) : null}
+      {listError ? <p className="error">{listError}</p> : null}
+      {credentials && credentials.length === 0 && !listError ? (
+        <p className="muted">No hosting connections yet. Add one below.</p>
+      ) : null}
+      {credentials && credentials.length > 0 ? (
+        <ul className="credentials-list">
+          {credentials.map((c) => {
+            const identity = describeIdentity(identities[c.id]);
+            return (
+              <li key={c.id} className="credential-row">
+                <div className="credential-info">
+                  <div className="credential-main">
+                    <span className="credential-platform">
+                      {PLATFORM_LABEL[c.platform]}
+                    </span>
+                    <span className="credential-label">{c.label}</span>
+                    {identity ? (
+                      <span className="credential-identity">{identity}</span>
+                    ) : null}
+                  </div>
+                  <div className="credential-meta">
+                    Last validated: {formatRelativeTime(c.last_validated_at)}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn-danger"
+                  onClick={() => void handleDelete(c.id)}
+                >
+                  Remove
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+
+      <form
+        className="add-credential-form"
+        onSubmit={(e) => void handleAdd(e)}
+      >
+        <div className="row">
+          <select
+            value={addPlatform}
+            onChange={(e) => setAddPlatform(e.target.value as Platform)}
+          >
+            <option value="vercel">Vercel</option>
+            <option value="render">Render</option>
+            <option value="github">GitHub</option>
+            <option value="supabase">Supabase</option>
+          </select>
+          <input
+            className="label-input"
+            type="text"
+            placeholder={PLATFORM_LABEL_PLACEHOLDER[addPlatform]}
+            value={addLabel}
+            onChange={(e) => setAddLabel(e.target.value)}
+            maxLength={100}
+            required
+          />
+        </div>
+        <input
+          className="credential-input"
+          type="password"
+          placeholder={PLATFORM_TOKEN_PLACEHOLDER[addPlatform]}
+          value={addCredential}
+          onChange={(e) => setAddCredential(e.target.value)}
+          maxLength={1000}
+          required
+        />
+        <button type="submit" className="btn-primary" disabled={adding}>
+          {adding ? "Adding…" : "Add connection"}
+        </button>
+        {addError ? <p className="error">{addError}</p> : null}
+      </form>
+    </div>
+  );
 }
 
 interface KeyRow {
@@ -862,6 +1182,9 @@ export function App() {
           <section className="settings-block">
             <h2>Settings</h2>
             <ProjectsPanel
+              getAccessTokenSilently={getAccessTokenSilently}
+            />
+            <PlatformCredentialsPanel
               getAccessTokenSilently={getAccessTokenSilently}
             />
             <KeysPanel getAccessTokenSilently={getAccessTokenSilently} />
