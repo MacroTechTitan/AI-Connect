@@ -69,6 +69,9 @@ export const projects = pgTable(
     name: text("name").notNull(),
     slug: text("slug").notNull(),
     description: text("description"),
+    provisioningState: text("provisioning_state")
+      .notNull()
+      .default("not_started"),
     createdByUserId: uuid("created_by_user_id")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
@@ -80,6 +83,10 @@ export const projects = pgTable(
       .defaultNow(),
   },
   (table) => ({
+    provisioningStateCheck: check(
+      "projects_provisioning_state_check",
+      sql`${table.provisioningState} IN ('not_started', 'provisioning', 'provisioned', 'failed', 'rolled_back')`,
+    ),
     organizationIdIdx: index("idx_projects_organization_id").on(
       table.organizationId,
     ),
@@ -88,6 +95,9 @@ export const projects = pgTable(
       table.organizationId,
       table.slug,
     ),
+    provisioningStateIdx: index("idx_projects_provisioning_state")
+      .on(table.provisioningState)
+      .where(sql`${table.provisioningState} != 'not_started'`),
   }),
 );
 
@@ -357,5 +367,72 @@ export const prompts = pgTable(
     projectIdIdx: index("idx_prompts_project_id")
       .on(table.projectId)
       .where(sql`${table.projectId} IS NOT NULL`),
+  }),
+);
+
+export const platformCredentials = pgTable(
+  "platform_credentials",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id").references(
+      () => organizations.id,
+      { onDelete: "set null" },
+    ),
+    platform: text("platform").notNull(),
+    label: text("label").notNull(),
+    vaultSecretId: uuid("vault_secret_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    lastValidatedAt: timestamp("last_validated_at", { withTimezone: true }),
+  },
+  (table) => ({
+    platformCheck: check(
+      "platform_credentials_platform_check",
+      sql`${table.platform} IN ('vercel', 'render', 'github', 'supabase')`,
+    ),
+    userIdIdx: index("idx_platform_credentials_user_id").on(table.userId),
+    userPlatformIdx: index("idx_platform_credentials_user_platform").on(
+      table.userId,
+      table.platform,
+    ),
+    organizationIdIdx: index("idx_platform_credentials_organization_id")
+      .on(table.organizationId)
+      .where(sql`${table.organizationId} IS NOT NULL`),
+  }),
+);
+
+export const projectProvisioningEvents = pgTable(
+  "project_provisioning_events",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    stepName: text("step_name").notNull(),
+    status: text("status").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    details: jsonb("details"),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    statusCheck: check(
+      "project_provisioning_events_status_check",
+      sql`${table.status} IN ('pending', 'in_progress', 'succeeded', 'failed', 'rolled_back', 'failed_to_rollback')`,
+    ),
+    projectIdCreatedAtIdx: index(
+      "idx_project_provisioning_events_project_id_created_at",
+    ).on(table.projectId, table.createdAt),
+    statusIdx: index("idx_project_provisioning_events_status")
+      .on(table.status)
+      .where(sql`${table.status} IN ('pending', 'in_progress')`),
   }),
 );

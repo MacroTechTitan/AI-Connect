@@ -199,6 +199,82 @@ html, body, #root { margin: 0; min-height: 100vh; }
   border-radius: 0.3rem;
 }
 
+.credentials-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.credential-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.35rem;
+  font-size: 0.9rem;
+}
+.credential-row .credential-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.credential-row .credential-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: baseline;
+}
+.credential-row .credential-platform {
+  font-weight: 600;
+}
+.credential-row .credential-label {
+  opacity: 0.85;
+}
+.credential-row .credential-identity {
+  font-size: 0.75rem;
+  opacity: 0.6;
+}
+.credential-row .credential-meta {
+  font-size: 0.75rem;
+  opacity: 0.55;
+}
+
+.add-credential-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.add-credential-form .row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.add-credential-form select,
+.add-credential-form input {
+  background: #15171c;
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.35rem;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  font-size: 0.9rem;
+}
+.add-credential-form select {
+  min-width: 8rem;
+}
+.add-credential-form .label-input {
+  flex: 1;
+  min-width: 12rem;
+}
+.add-credential-form .credential-input {
+  width: 100%;
+}
+
 .add-key-form,
 .test-prompt-form {
   display: flex;
@@ -294,6 +370,141 @@ html, body, #root { margin: 0; min-height: 100vh; }
   opacity: 0.8;
   margin-top: 0.2rem;
   line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.project-row .project-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.project-row .project-name {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.genesis-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.25rem;
+  border: 1px solid transparent;
+}
+.genesis-badge.badge-muted {
+  color: rgba(255, 255, 255, 0.5);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+.genesis-badge.badge-active {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.4);
+  background: rgba(251, 191, 36, 0.08);
+}
+.genesis-badge.badge-success {
+  color: #4ade80;
+  border-color: rgba(74, 222, 128, 0.4);
+  background: rgba(74, 222, 128, 0.08);
+}
+.genesis-badge.badge-error {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.genesis-progress {
+  margin-top: 0.6rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.35rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+.genesis-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.genesis-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  font-size: 0.85rem;
+}
+.genesis-step .step-icon {
+  flex-shrink: 0;
+  line-height: 1.4;
+  font-size: 0.9rem;
+}
+.genesis-step .step-icon.step-pending {
+  color: rgba(255, 255, 255, 0.4);
+}
+.genesis-step .step-icon.step-active {
+  color: #fbbf24;
+}
+.genesis-step .step-icon.step-success {
+  color: #4ade80;
+}
+.genesis-step .step-icon.step-error {
+  color: #f87171;
+}
+.genesis-step .step-icon.step-warn {
+  color: #facc15;
+}
+.genesis-step .step-icon.step-muted {
+  color: rgba(255, 255, 255, 0.4);
+}
+.genesis-step .step-icon.step-spin {
+  display: inline-block;
+  animation: genesis-spin 1.1s linear infinite;
+}
+@keyframes genesis-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+.genesis-step .step-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.genesis-step .step-head {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+.genesis-step .step-name {
+  font-weight: 500;
+}
+.genesis-step .step-elapsed {
+  font-size: 0.72rem;
+  opacity: 0.5;
+}
+.genesis-step .step-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+.genesis-step .step-details a {
+  color: #7dd3fc;
+}
+.genesis-step .step-error {
+  font-size: 0.78rem;
+  color: #f87171;
   white-space: pre-wrap;
   word-break: break-word;
 }

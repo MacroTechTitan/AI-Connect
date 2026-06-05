@@ -11,8 +11,12 @@ State at time of writing:
 - Sprint 0.5 polish shipped (2026-05-24) — landing-page copy and visual cleanup.
 - Sprint 1 shipped (PR #5 merge 187f962, 2026-05-25) — Auth0 JWT middleware, `/api/me` with lazy user creation + audit log, frontend Auth0 SDK and `Signed in as …` UI.
 - Sprint 1.5 production hotfixes direct to master — CORS allowed-origins fix (db341ee) and Auth0 namespaced email claim fix (be1dd2c). Both qualified under the [Direct-to-master commit rules](#direct-to-master-commit-rules) and are logged in `docs/sprints/SPRINT_LOG.md`.
-- Sprint 2 in progress on branch sprint/2-byoai — six commits done locally: (1) schema migration adding `provider_keys`, `provider_pricing`, `prompts` tables; (2) provider abstraction layer with Anthropic, OpenAI, and Ollama clients behind a single `ProviderClient` interface; (3) `POST/GET/DELETE /api/keys` with Supabase Vault encryption for the raw secret value; (4) `POST /api/prompt` with cost tracking, token logging, latency, and SHA-256 fingerprints in lieu of stored prompt/response text; (5) inline frontend settings UI for managing keys and testing prompts; (6) this docs commit — pricing seed SQL + Sprint 2 smoke test + this status update.
-- Production currently runs Sprint 1.5 from master. Sprint 2 ships to production once this branch merges per the MTTBuild merge-and-ship ritual.
+- Sprint 2 shipped (PR #6 merge b69edec, 2026-06-02) — BYOAI provider abstraction (`provider_keys`/`provider_pricing`/`prompts` schema, Anthropic/OpenAI/Ollama clients behind a single `ProviderClient` interface, `/api/keys` with Vault encryption, `/api/prompt` with cost/token/latency logging, frontend settings UI).
+- Sprint 2.5 production fix direct to master — refreshed pricing seed with current model IDs (9941a82).
+- Sprint 3 shipped (PR #7 merge, 2026-06-03) — multi-tenant data model (`organizations → projects → users`, org-scoped queries).
+- Sprint 3.5 production polish direct to master — audit-log `organization_id` population + Auth0 session-expired UX (a3b2c6d).
+- Sprint 4 in progress on branch sprint/4-project-genesis — Project Genesis MVP. Commits done locally on the branch: schema migration (`platform_credentials`, `project_provisioning_events`, projects `provisioning_state`), platform integration layer (Vercel/Render/GitHub/Supabase clients), platform-credential endpoints + UI, orchestrator core (5a), best-effort reverse-order rollback (5b), and SSE streaming + frontend genesis UI (5c). Migrations 0003 and 0004 applied to Supabase.
+- Production currently runs Sprint 3.5 from master. Sprint 4 ships to production once this branch merges per the MTTBuild merge-and-ship ritual, followed by a smoke test against the live URLs (see `docs/sprints/SPRINT_4_TESTING.md`).
 
 The README (`README.md`) is treated as the project specification — when architecture changes, the README changes first. The Sprint 0 acceptance criteria live in README §9 and `SPRINT_0_HANDOFF.md`.
 
