@@ -174,7 +174,7 @@ The data model is ready: projects exist (Sprint 3), provider keys exist (Sprint 
 
 ## Sprint 4 — Project Genesis MVP (2026-06-04)
 - Branch: sprint/4-project-genesis (not yet merged at time of writing)
-- 7 commits on the branch: schema (c353c45), platform integration layer (f319be6), credentials endpoints (6ae73ad), credentials UI (b6947fc), orchestrator core 5a (f693a00), rollback 5b (b235abe), SSE streaming + UI 5c (last commit hash unknown until merge), docs (1c01e01).
+- 7 commits on the branch: schema (c353c45), platform integration layer (f319be6), credentials endpoints (6ae73ad), credentials UI (b6947fc), orchestrator core 5a (f693a00), rollback 5b (b235abe), SSE streaming + UI 5c (97565db), docs (1c01e01).
 - Migrations 0003 (platform_credentials + provisioning state + events) and 0004 (failed_to_rollback status) both applied to Supabase.
 - Production verification: pending — Sprint 4 requires real platform tokens (Vercel, Render, GitHub, Supabase) for live smoke testing per docs/sprints/SPRINT_4_TESTING.md.
 
