@@ -172,6 +172,48 @@ Project Genesis MVP. Per Sprint 0.5 architectural commitment, this is when AI Co
 
 The data model is ready: projects exist (Sprint 3), provider keys exist (Sprint 2), audit logs scope by org/project (Sprints 2+3). Sprint 4 builds the provisioning automation layer on top.
 
+## Sprint 4 — Project Genesis MVP (2026-06-04)
+- Branch: sprint/4-project-genesis (not yet merged at time of writing)
+- 7 commits on the branch: schema (c353c45), platform integration layer (f319be6), credentials endpoints (6ae73ad), credentials UI (b6947fc), orchestrator core 5a (f693a00), rollback 5b (b235abe), SSE streaming + UI 5c (last commit hash unknown until merge), docs (1c01e01).
+- Migrations 0003 (platform_credentials + provisioning state + events) and 0004 (failed_to_rollback status) both applied to Supabase.
+- Production verification: pending — Sprint 4 requires real platform tokens (Vercel, Render, GitHub, Supabase) for live smoke testing per docs/sprints/SPRINT_4_TESTING.md.
+
+### What shipped
+- Two new tables: platform_credentials (encrypted Vercel/Render/GitHub/Supabase tokens via Vault) and project_provisioning_events (per-step audit trail powering SSE progress). Plus provisioning_state column on projects with 5-state CHECK ('not_started' → 'provisioning' → 'provisioned' | 'failed' | 'rolled_back'), extended to 6 states in migration 0004 with 'failed_to_rollback' for partial-rollback events.
+- Platform integration layer at apps/api/src/lib/platforms/ — strategy pattern with 4 implementations (Vercel, Render, GitHub, Supabase), pure fetch + AbortController + 30s timeouts, no SDK dependencies. Each client exposes validate(), createResource(), deleteResource(). Mirrors Sprint 2's provider abstraction approach.
+- POST/GET/DELETE /api/platform-credentials endpoints with Vault encryption. Validation BEFORE storage — credentials are tested against the platform's API at registration time, catching bad/revoked tokens immediately rather than at genesis time. Identity from validate() (login/email/org) surfaced in POST response.
+- POST /api/projects/:id/genesis endpoint — kicks off provisioning. Validates project state, checks all 4 platform credentials are registered, launches the orchestrator as a detached promise (Decision A1), returns 202 immediately with the project_id.
+- Orchestrator at apps/api/src/lib/genesis/ — runs 7 sequential steps (create GitHub repo, Supabase project, Vercel project, Render service, plus 3 placeholder steps for Sprint 5+ DNS/Auth0 work and a verify_deployment step that polls the Render URL for up to 5 minutes). Each step writes pending → in_progress → succeeded/failed events to project_provisioning_events as standalone DB writes (not batched, so SSE consumers see partial progress).
+- Rollback on step failure (Decision C2) — when a step fails, the orchestrator walks successful rollbackable steps in REVERSE order, calling each platform's deleteResource. Rollback events are written as step_name='rollback:<original>'. Rollback failures are SOFT (event marked 'failed_to_rollback' with manual_cleanup_url embedded in details for UI surfacing) — don't crash the orchestrator. Project terminal state branches on rollback success: clean rollback → 'rolled_back', partial → 'failed'.
+- GET /api/projects/:id/provisioning-events SSE endpoint (Decision B1) — tails the events table with 1-second poll, dedupes by (id, status, started_at, completed_at) signature so in-place mutations re-emit, sends 15s heartbeats to defeat proxy idle-connection-killers, 15-minute hard timeout. Headers (Content-Type, Cache-Control: no-cache, no-transform, X-Accel-Buffering: no) configured to defeat Cloudflare/Render response buffering.
+- Frontend GenesisProgress component — subscribes via fetch + ReadableStream (Option 3 from Decision B1; native EventSource doesn't support Authorization headers, fetch-based approach keeps JWT out of URLs/logs). Live-streaming step list with humanized names, color-coded status icons (○ pending, ◐ spinning, ● green/red/yellow/muted), live-ticking elapsed times, details (URLs, resource IDs, manual_cleanup_urls), error messages.
+- Frontend PlatformCredentialsPanel — fourth subsection in settings panel (between Projects and Provider keys). Platform-specific token placeholders explaining where to generate each (vercel.com/account/tokens, github.com/settings/tokens, etc.) — key UX win for keeping users unstuck before genesis. Identity ("as joegelet") surfaced from validate() response, stored in session map.
+- ProjectsPanel extended with provisioning state badge (color-coded) and Provision button (enabled for not_started/failed/rolled_back states).
+- Bundle: 346.56 → 353.22 KB raw / 107.23 → 109.55 KB gzipped JS (+6.66 KB raw / +2.32 KB gzipped from 5c streaming UI); CSS 6.88 → 8.90 KB raw (+2.02 KB / +0.39 KB gzipped). Total Sprint 4 bundle delta: ~+15 KB raw, ~+4.5 KB gzipped across 4 commits with frontend changes (4, 5c).
+
+### Lessons learned
+- Splitting Commit 5 into 5a (orchestrator) → 5b (rollback) → 5c (SSE) was the right call. Each sub-commit was ~150-300 lines, independently reviewable, with clean revert points. Comparing to Sprint 3 Commit 4 (single ~500-line commit covering middleware + 4 route updates), the smaller units made spec deviations easier to catch and discuss. New rule of thumb: any single commit projected >400 lines should be considered for sub-commit split.
+- Decision A1 (detached promise vs job queue) was the right pragmatic choice for Sprint 4 MVP but introduces process-crash risk that needs documenting. If the Render API process dies mid-genesis, the project stays stuck in 'provisioning'. Recovery query documented in docs/future-ideas.md. Real fix is Sprint 6+ job queue (BullMQ + Redis, or pg-boss).
+- Decision B1 (SSE) and the EventSource-vs-fetch tradeoff — the native EventSource API doesn't support custom headers, so to preserve our Sprint 1 bearer-token auth model we implemented SSE parsing via fetch + ReadableStream. This is the right call but worth flagging that browsers' built-in auto-reconnect logic is now our responsibility. Sprint 4 doesn't implement reconnect; the frontend just closes the panel on terminal state. Future sprints with longer-running flows may need explicit reconnect with last-event-id support.
+- Decision C2 (best-effort rollback) plus event dedup-by-signature were the two non-obvious-correctness wins. UUIDs aren't monotonic, so an id cursor alone wouldn't work for SSE replay — tracking (id, status, started_at, completed_at) signature correctly handles in-place row mutations as the orchestrator updates events from pending → in_progress → succeeded. Worth canonicalizing this pattern for any future event-stream endpoints.
+- Render service creation auto-wires the GitHub webhook when you pass the repo URL in the create payload — so the 'wire_github_to_render' step is a no-op placeholder rather than an explicit webhook call. This was a useful discovery; it simplifies the orchestrator but means we're relying on Render's auto-wiring behavior. If Render changes this, the placeholder step becomes a real failure surface.
+- Two no-op steps in the orchestrator (wire_github_to_render, inject_env_vars) feel awkward but were the right architectural call — they preserve the 7-step shape that the frontend and tests will eventually rely on, and Sprint 5+ can replace the no-ops with real implementations without changing the orchestrator's structure. The UX is honest about this ("env var injection deferred to Sprint 5").
+
+### Deferred to Sprint 4.5 / housekeeping
+- Process-crash recovery query for stuck 'provisioning' projects (documented; not yet operationalized).
+- Resource cleanup on project DELETE — currently only deletes AI Connect's DB row, not the provisioned cloud resources. Sprint 5 should add an optional "delete all" with confirmation.
+- LISTEN/NOTIFY for SSE event push (Sprint 6+ when at scale concerns).
+- Template scaffolding (templateRepoUrl field is plumbed but Sprint 4 uses auto_init for empty repos). Sprint 5.
+- DNS automation + Auth0 tenant scaffold + Stripe Connect — the no-op steps in the orchestrator. Sprint 5/6/9 respectively.
+- Org-owned platform credentials via XOR refactor (parallel to provider_keys, Sprint 4-5).
+- Identity persistence on platform_credentials (current UI shows identity only on freshly-added; persisted in jsonb in Sprint 5).
+- Validate-key-on-add for AI providers (still deferred from Sprint 2.5).
+- SSE reconnect with last-event-id support for longer-running flows.
+- Bundle size 353.22 KB raw — still acceptable but the Auth0 SDK + settings UI + genesis UI together are creeping. Code-splitting research before Sprint 5 lands.
+
+### Sprint 5 starting point
+DNS automation, env var injection, template scaffolding for Project Genesis. Path B of the signup wizard (takeover existing Replit/Lovable/GitHub projects) is also Sprint 5 per the roadmap. Project Genesis is now demo-worthy (a real deployed project in ~10 minutes) but rough around the edges — Sprint 5 fills in the gaps that make it actually useful (custom domains, working env vars, real templates instead of empty repos).
+
 ---
 
-*Last updated: 2026-06-03*
+*Last updated: 2026-06-04*
