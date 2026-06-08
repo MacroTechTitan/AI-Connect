@@ -993,12 +993,53 @@ function GenesisProgress({
   );
 }
 
+type TemplateChoice = "html-js" | "sveltekit" | "nextjs";
+
+// Project subdomains live under this domain; the full URL is built at render.
+const PROJECTS_BASE_DOMAIN = "aiconnectprojects.macrotechtitan.com";
+
+const TEMPLATE_LABEL: Record<TemplateChoice, string> = {
+  "html-js": "HTML + JavaScript",
+  sveltekit: "SvelteKit",
+  nextjs: "Next.js",
+};
+
+function templateLabelFor(value: string): string {
+  return TEMPLATE_LABEL[value as TemplateChoice] ?? value;
+}
+
+// Add-project selector: order + helper text. html-js first (the default and
+// simplest "click button, get a working project" path).
+const TEMPLATE_OPTIONS: Array<{
+  value: TemplateChoice;
+  label: string;
+  helper: string;
+}> = [
+  {
+    value: "html-js",
+    label: "HTML + JavaScript",
+    helper: "Minimal Express server, no framework",
+  },
+  {
+    value: "nextjs",
+    label: "Next.js",
+    helper: "React-based with App Router",
+  },
+  {
+    value: "sveltekit",
+    label: "SvelteKit",
+    helper: "Lightweight, fast, modern",
+  },
+];
+
 interface ProjectRow {
   id: string;
   name: string;
   slug: string;
   description: string | null;
   provisioning_state: ProvisioningState;
+  template_choice: TemplateChoice;
+  subdomain: string | null;
   organization_id: string;
   created_by_user_id: string;
   created_at: string;
@@ -1016,6 +1057,7 @@ function ProjectsPanel({
 
   const [addName, setAddName] = useState("");
   const [addDescription, setAddDescription] = useState("");
+  const [addTemplate, setAddTemplate] = useState<TemplateChoice>("html-js");
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
 
@@ -1088,6 +1130,7 @@ function ProjectsPanel({
           body: JSON.stringify({
             name: addName,
             ...(addDescription ? { description: addDescription } : {}),
+            template_choice: addTemplate,
           }),
         },
         getAccessTokenSilently,
@@ -1120,6 +1163,7 @@ function ProjectsPanel({
       }
       setAddName("");
       setAddDescription("");
+      setAddTemplate("html-js");
       await refresh();
     } catch (err) {
       if (isSessionExpired(err)) {
@@ -1274,6 +1318,25 @@ function ProjectsPanel({
                   {p.description ? (
                     <div className="project-description">{p.description}</div>
                   ) : null}
+                  <div className="project-meta">
+                    <span className="project-template-badge">
+                      Template: {templateLabelFor(p.template_choice)}
+                    </span>
+                    {p.subdomain ? (
+                      <a
+                        className={`project-subdomain-link${
+                          p.provisioning_state === "provisioned"
+                            ? ""
+                            : " muted"
+                        }`}
+                        href={`https://${p.subdomain}.${PROJECTS_BASE_DOMAIN}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        URL: {p.subdomain}.{PROJECTS_BASE_DOMAIN}
+                      </a>
+                    ) : null}
+                  </div>
                   {provisionError[p.id] ? (
                     <div className="error">{provisionError[p.id]}</div>
                   ) : null}
@@ -1325,6 +1388,22 @@ function ProjectsPanel({
           onChange={(e) => setAddDescription(e.target.value)}
           maxLength={5000}
         />
+        <fieldset className="template-selector">
+          <legend>Template</legend>
+          {TEMPLATE_OPTIONS.map((opt) => (
+            <label key={opt.value} className="template-option">
+              <input
+                type="radio"
+                name="template_choice"
+                value={opt.value}
+                checked={addTemplate === opt.value}
+                onChange={() => setAddTemplate(opt.value)}
+              />
+              <span className="template-option-label">{opt.label}</span>
+              <span className="template-option-helper">{opt.helper}</span>
+            </label>
+          ))}
+        </fieldset>
         <button type="submit" className="btn-primary" disabled={adding}>
           {adding ? "Adding…" : "Add project"}
         </button>

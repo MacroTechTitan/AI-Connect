@@ -529,6 +529,68 @@ html, body, #root { margin: 0; min-height: 100vh; }
   resize: vertical;
 }
 
+/* Template selector (radio group in the Add-project form). */
+.template-selector {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.35rem;
+  padding: 0.5rem 0.7rem 0.6rem;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.template-selector legend {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.6;
+  padding: 0 0.3rem;
+}
+.template-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 0.5rem;
+  align-items: baseline;
+  cursor: pointer;
+  padding: 0.15rem 0;
+}
+.template-option input {
+  grid-row: span 2;
+  align-self: center;
+}
+.template-option-label {
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+.template-option-helper {
+  grid-column: 2;
+  font-size: 0.75rem;
+  opacity: 0.55;
+}
+
+/* Project row: template badge + provisioned URL line. */
+.project-row .project-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 0.9rem;
+  margin-top: 0.25rem;
+}
+.project-template-badge {
+  font-size: 0.75rem;
+  opacity: 0.55;
+}
+.project-subdomain-link {
+  font-size: 0.82rem;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+    "Liberation Mono", monospace;
+  color: #58a6ff;
+  word-break: break-all;
+}
+.project-subdomain-link.muted {
+  color: #8b949e;
+}
+
 .session-expired {
   display: flex;
   align-items: center;

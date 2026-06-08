@@ -29,12 +29,28 @@ const MIN_SLUG_CHARS = 2;
 const MAX_SLUG_CHARS = 50;
 const MAX_SLUG_RETRIES = 5;
 
+// The three Project Genesis templates; mirrors the projects.template_choice
+// CHECK constraint. Local to the route layer so it doesn't couple to genesis
+// internals — the orchestrator validates independently.
+const TEMPLATE_CHOICES = ["html-js", "sveltekit", "nextjs"] as const;
+type TemplateChoice = (typeof TEMPLATE_CHOICES)[number];
+const DEFAULT_TEMPLATE_CHOICE: TemplateChoice = "html-js";
+
+function isTemplateChoice(value: unknown): value is TemplateChoice {
+  return (
+    typeof value === "string" &&
+    (TEMPLATE_CHOICES as readonly string[]).includes(value)
+  );
+}
+
 interface ProjectRow {
   id: string;
   name: string;
   slug: string;
   description: string | null;
   provisioningState: string;
+  templateChoice: string;
+  subdomain: string | null;
   organizationId: string;
   createdByUserId: string;
   createdAt: Date;
@@ -47,6 +63,8 @@ const projectProjection = {
   slug: projects.slug,
   description: projects.description,
   provisioningState: projects.provisioningState,
+  templateChoice: projects.templateChoice,
+  subdomain: projects.subdomain,
   organizationId: projects.organizationId,
   createdByUserId: projects.createdByUserId,
   createdAt: projects.createdAt,
@@ -65,6 +83,8 @@ function toResponse(p: ProjectRow) {
     slug: p.slug,
     description: p.description,
     provisioning_state: p.provisioningState,
+    template_choice: p.templateChoice,
+    subdomain: p.subdomain,
     organization_id: p.organizationId,
     created_by_user_id: p.createdByUserId,
     created_at: p.createdAt,
@@ -76,6 +96,7 @@ interface ParsedBody {
   name: string;
   description: string | null;
   slug: string | undefined; // explicit slug from caller; undefined → derive
+  templateChoice: TemplateChoice; // defaults to html-js when omitted
 }
 
 function parseBody(req: Request, res: Response): ParsedBody | null {
@@ -120,7 +141,18 @@ function parseBody(req: Request, res: Response): ParsedBody | null {
     slug = body.slug;
   }
 
-  return { name, description, slug };
+  // template_choice is optional; omitted/null defaults to html-js (matches the
+  // DB default). Any other non-allowed value is a hard 400.
+  let templateChoice: TemplateChoice = DEFAULT_TEMPLATE_CHOICE;
+  if (body.template_choice !== undefined && body.template_choice !== null) {
+    if (!isTemplateChoice(body.template_choice)) {
+      res.status(400).json({ error: "invalid_template_choice" });
+      return null;
+    }
+    templateChoice = body.template_choice;
+  }
+
+  return { name, description, slug, templateChoice };
 }
 
 async function handleCreateProject(
@@ -166,6 +198,7 @@ async function handleCreateProject(
         name: body.name,
         slug,
         description: body.description,
+        templateChoice: body.templateChoice,
         createdByUserId: ctx.userId,
       })
       .onConflictDoNothing({
