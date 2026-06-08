@@ -12,6 +12,21 @@ export type GenesisStepName =
   | "inject_env_vars"
   | "verify_deployment";
 
+// The three templates Project Genesis can scaffold from. Mirrors the
+// projects.template_choice CHECK constraint.
+export type TemplateChoice = "html-js" | "sveltekit" | "nextjs";
+
+// Static AI-Connect-owned template repos, keyed by template choice. The GitHub
+// step generates a new repo from one of these when ctx.templateChoice is set.
+export const TEMPLATE_REPOS: Record<
+  TemplateChoice,
+  { owner: string; repo: string }
+> = {
+  "html-js": { owner: "MacroTechTitan", repo: "template-html-js" },
+  sveltekit: { owner: "MacroTechTitan", repo: "template-sveltekit" },
+  nextjs: { owner: "MacroTechTitan", repo: "template-nextjs" },
+} as const;
+
 // The outcome a step hands back to the orchestrator. Steps never touch the DB
 // or the events table — they return this, and the orchestrator translates it
 // into a project_provisioning_events row. `details` is persisted as the event
@@ -21,13 +36,18 @@ export type GenesisStepName =
 // `platform` + `rollbackable` drive 5b rollback: when a later step fails, the
 // orchestrator walks successful steps in reverse and deletes each one's
 // `resourceId` via that `platform`'s client. `rollbackable` is false for steps
-// that created nothing to undo (the wire/inject no-ops, the read-only verify).
+// that created nothing to undo (the read-only verify step).
+//
+// `platform` accepts "cloudflare" in addition to the user-supplied Platform
+// union: the Sprint 5 DNS step records "cloudflare" so the rollback dispatcher
+// routes it to the env-level Cloudflare client (not a PlatformClient). It is a
+// dispatch/audit tag, not a Platform union value.
 export interface GenesisStepResult {
   status: "succeeded" | "failed";
   details?: Record<string, unknown>;
   errorMessage?: string;
   resourceId?: string;
-  platform?: Platform;
+  platform?: Platform | "cloudflare";
   rollbackable?: boolean;
 }
 
@@ -59,4 +79,20 @@ export interface GenesisContext {
   };
   validated: Record<Platform, ValidatedIdentity>;
   results: Partial<Record<GenesisStepName, GenesisStepResult>>;
+
+  // --- Sprint 5: populated as steps run -------------------------------------
+  // Set at orchestrator start from project.template_choice. Undefined falls
+  // back to Sprint 4's empty auto_init repo (legacy projects).
+  templateChoice?: TemplateChoice;
+  // Set after wire_github_to_render provisions the Cloudflare CNAME.
+  subdomain?: string;
+  subdomainCnameRecordId?: string;
+  // The Supabase Postgres connection string. In-memory only for the duration of
+  // the run — never logged, never persisted as plaintext (only the Vault id is).
+  databaseConnectionString?: string;
+  // Persisted to projects.database_connection_string_vault_id.
+  databaseConnectionStringVaultId?: string;
+  // Render env vars have no per-id delete; we track the keys we set so rollback
+  // can fetch-filter-put them back out.
+  renderEnvVarKeys?: string[];
 }

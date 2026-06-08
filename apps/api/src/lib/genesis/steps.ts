@@ -1,7 +1,28 @@
 import { randomBytes } from "node:crypto";
 
-import { getPlatformClient } from "../platforms/index.js";
-import type { GenesisContext, GenesisStep, GenesisStepResult } from "./types.js";
+import { eq } from "drizzle-orm";
+
+import { getDb } from "../../db/client.js";
+import { projects } from "../../db/schema.js";
+import { env } from "../env.js";
+import {
+  createRepoFromTemplate,
+  getCloudflareClient,
+  getPlatformClient,
+  getServiceEnvVars,
+  putServiceEnvVars,
+  supabaseBuildConnectionString,
+  supabaseWaitUntilReady,
+  type PlatformActionResult,
+  type RenderEnvVar,
+} from "../platforms/index.js";
+import * as vault from "../vault.js";
+import {
+  TEMPLATE_REPOS,
+  type GenesisContext,
+  type GenesisStep,
+  type GenesisStepResult,
+} from "./types.js";
 
 // --- helpers ---------------------------------------------------------------
 
@@ -46,6 +67,12 @@ export async function createGithubRepo(
   ctx: GenesisContext,
 ): Promise<GenesisStepResult> {
   const github = getPlatformClient("github");
+  // Branch on template: a chosen template generates from the matching
+  // AI-Connect template repo; otherwise fall back to Sprint 4's empty auto_init
+  // repo (legacy / unset projects). Both paths return the same shape.
+  const template = ctx.templateChoice
+    ? TEMPLATE_REPOS[ctx.templateChoice]
+    : undefined;
 
   const candidates = [ctx.slug];
   for (let i = 2; i <= GITHUB_NAME_RETRIES + 1; i++) {
@@ -54,13 +81,21 @@ export async function createGithubRepo(
 
   let lastError = `Could not create a GitHub repo for '${ctx.slug}'.`;
   for (const name of candidates) {
-    const result = await github.createResource({
-      credential: ctx.credentials.github,
-      name,
-      description: ctx.name,
-      private: true,
-      autoInit: true,
-    });
+    const result: PlatformActionResult = template
+      ? await createRepoFromTemplate(
+          ctx.credentials.github,
+          template.owner,
+          template.repo,
+          name,
+          { description: ctx.name, private: true },
+        )
+      : await github.createResource({
+          credential: ctx.credentials.github,
+          name,
+          description: ctx.name,
+          private: true,
+          autoInit: true,
+        });
 
     if (result.status === "success") {
       // github's resourceId IS the full_name (owner/repo); html_url comes back
@@ -77,13 +112,15 @@ export async function createGithubRepo(
           name,
           repo_id: result.details.id,
           default_branch: result.details.default_branch,
+          // Record which template scaffolded the repo (or that none did).
+          template: template ? `${template.owner}/${template.repo}` : null,
         },
       };
     }
 
     lastError = result.errorMessage;
     // Only a retryable name collision earns another candidate; anything else
-    // (auth, scopes, server error) is terminal.
+    // (auth, scopes, server error, template_not_found) is terminal.
     if (result.errorCode === "name_taken" && result.isRetryable) {
       continue;
     }
@@ -98,10 +135,19 @@ export async function createGithubRepo(
 
 // --- step b: create the Supabase project -----------------------------------
 
+const SUPABASE_READY_INTERVAL_MS = 5_000;
+const SUPABASE_READY_TIMEOUT_MS = 120_000;
+
 // Supabase accepts the project immediately but it stays COMING_UP for 30-90s.
-// Sprint 4 MVP hands back the project id without waiting for ACTIVE_HEALTHY —
-// nothing downstream needs the DB yet (env-var injection is deferred to
-// Sprint 5). When that lands, this is where an ACTIVE_HEALTHY poll goes.
+// Sprint 5 now waits for ACTIVE_HEALTHY, builds the Postgres connection string
+// from the dbPass the create call returned, encrypts it to Vault, and records
+// the vault id on the project (inject_env_vars reads it back as DATABASE_URL).
+//
+// Self-cleanup note: the orchestrator's reverse-order rollback only undoes
+// steps that SUCCEEDED before the failed one — it does not touch the failed
+// step's own resource. So if creation succeeds but the wait or the Vault write
+// fails, THIS step deletes the Supabase project it just made before returning
+// failed. (A later-step failure rolls it back the normal way, via rollbackable.)
 export async function createSupabaseProject(
   ctx: GenesisContext,
 ): Promise<GenesisStepResult> {
@@ -114,7 +160,8 @@ export async function createSupabaseProject(
     };
   }
 
-  const result = await getPlatformClient("supabase").createResource({
+  const supabase = getPlatformClient("supabase");
+  const result = await supabase.createResource({
     credential: ctx.credentials.supabase,
     name: ctx.slug,
     region: "us-east-2",
@@ -122,22 +169,90 @@ export async function createSupabaseProject(
     dbPass: generateDbPassword(),
   });
 
-  if (result.status === "success") {
-    return {
-      status: "succeeded",
-      resourceId: result.resourceId,
-      platform: "supabase",
-      rollbackable: true,
-      details: {
-        id: result.resourceId,
-        dashboard_url: result.urls.dashboard ?? "",
-        api_url: result.urls.api ?? "",
-        status: result.details.status,
-      },
-    };
+  if (result.status !== "success") {
+    return { status: "failed", errorMessage: result.errorMessage };
   }
 
-  return { status: "failed", errorMessage: result.errorMessage };
+  const projectRef = result.resourceId;
+  const dbPass =
+    typeof result.details.dbPass === "string" ? result.details.dbPass : undefined;
+  const region =
+    typeof result.details.region === "string"
+      ? result.details.region
+      : "us-east-2";
+
+  // Anything past this point that fails must delete the project we just made.
+  const selfClean = async (errorMessage: string): Promise<GenesisStepResult> => {
+    await supabase
+      .deleteResource(ctx.credentials.supabase, projectRef)
+      .catch(() => {});
+    return { status: "failed", errorMessage };
+  };
+
+  if (!dbPass) {
+    return selfClean(
+      "Supabase create did not return a db password — cannot build the connection string.",
+    );
+  }
+
+  const ready = await supabaseWaitUntilReady(
+    ctx.credentials.supabase,
+    projectRef,
+    { intervalMs: SUPABASE_READY_INTERVAL_MS, timeoutMs: SUPABASE_READY_TIMEOUT_MS },
+  );
+  if (!ready.ready) {
+    return selfClean(
+      ready.errorMessage ??
+        `Supabase project ${projectRef} did not reach ACTIVE_HEALTHY.`,
+    );
+  }
+
+  // Build → encrypt → persist. Self-clean (project + any Vault secret) on error.
+  let vaultSecretId: string | undefined;
+  try {
+    const connectionString = supabaseBuildConnectionString(
+      projectRef,
+      dbPass,
+      region,
+    );
+    vaultSecretId = await vault.createSecret(
+      `ai-connect:project:${ctx.projectId}:database-connection-string`,
+      connectionString,
+      `Supabase Postgres connection string for project ${ctx.projectId}`,
+    );
+    await getDb()
+      .update(projects)
+      .set({ databaseConnectionStringVaultId: vaultSecretId })
+      .where(eq(projects.id, ctx.projectId));
+    // Only commit to ctx once everything persisted.
+    ctx.databaseConnectionString = connectionString;
+    ctx.databaseConnectionStringVaultId = vaultSecretId;
+  } catch (err) {
+    if (vaultSecretId) {
+      await vault.deleteSecret(vaultSecretId).catch(() => {});
+    }
+    return selfClean(
+      `Supabase project is healthy but storing its connection string failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+
+  return {
+    status: "succeeded",
+    resourceId: projectRef,
+    platform: "supabase",
+    rollbackable: true,
+    details: {
+      id: projectRef,
+      dashboard_url: result.urls.dashboard ?? "",
+      api_url: result.urls.api ?? "",
+      status: "ACTIVE_HEALTHY",
+      dbReady: true,
+      // The Vault id (a reference), never the connection string itself.
+      vaultSecretId,
+    },
+  };
 }
 
 // --- step c: create the Vercel project -------------------------------------
@@ -226,37 +341,167 @@ export async function createRenderService(
   return { status: "failed", errorMessage: result.errorMessage };
 }
 
-// --- step e: wire GitHub → Render (no-op for Sprint 4) ----------------------
+// --- step e: provision the Cloudflare subdomain CNAME -----------------------
 
-// Render auto-creates the deploy webhook when a service is created from a
-// GitHub repo URL, so there is nothing to do here yet. The step exists so
-// Sprint 5+ can add explicit webhook validation without reshaping the
-// orchestrator's step list.
+// Render auto-wires the GitHub deploy webhook at service-creation time, so the
+// remaining "wiring" work is DNS: point {slug}.{CLOUDFLARE_BASE_DOMAIN} at the
+// Render onrender.com host via a CNAME. The Cloudflare record is rollbackable
+// (platform tag "cloudflare" routes the orchestrator to deleteSubdomainCname).
 export async function wireGithubToRender(
-  _ctx: GenesisContext,
+  ctx: GenesisContext,
 ): Promise<GenesisStepResult> {
+  const serviceUrl = detailString(ctx, "create_render_service", "url");
+  if (!serviceUrl) {
+    return {
+      status: "failed",
+      errorMessage:
+        "No Render service URL in context — create_render_service must succeed before DNS can be wired.",
+    };
+  }
+
+  let renderHostname: string;
+  try {
+    // CNAME content is the bare host, not the scheme-qualified URL.
+    renderHostname = new URL(serviceUrl).hostname;
+  } catch {
+    return {
+      status: "failed",
+      errorMessage: `Render service URL '${serviceUrl}' is not a valid URL — cannot derive the CNAME target.`,
+    };
+  }
+
+  const cloudflare = getCloudflareClient();
+  const result = await cloudflare.createSubdomainCname(ctx.slug, renderHostname);
+  if (!result.success) {
+    return {
+      status: "failed",
+      errorMessage: result.errorMessage ?? "Cloudflare CNAME creation failed.",
+    };
+  }
+
+  const baseDomain = env.CLOUDFLARE_BASE_DOMAIN ?? "";
+  const fullUrl = `https://${ctx.slug}.${baseDomain}`;
+  const recordId = result.recordId;
+
+  // Cloudflare succeeded but didn't return a record id — we can't track it for
+  // rollback. Succeed (the record exists) but mark it non-rollbackable and note
+  // it for manual cleanup.
+  if (!recordId) {
+    ctx.subdomain = ctx.slug;
+    await getDb()
+      .update(projects)
+      .set({ subdomain: ctx.slug })
+      .where(eq(projects.id, ctx.projectId))
+      .catch(() => {});
+    return {
+      status: "succeeded",
+      rollbackable: false,
+      details: {
+        subdomain: ctx.slug,
+        fullUrl,
+        note: "CNAME created but Cloudflare returned no record id; manual cleanup may be needed on rollback.",
+      },
+    };
+  }
+
+  // Persist the subdomain. If that write fails, undo the CNAME (this step's own
+  // resource isn't covered by the orchestrator's reverse-order rollback).
+  try {
+    await getDb()
+      .update(projects)
+      .set({ subdomain: ctx.slug })
+      .where(eq(projects.id, ctx.projectId));
+  } catch (err) {
+    await cloudflare.deleteSubdomainCname(recordId).catch(() => {});
+    return {
+      status: "failed",
+      errorMessage: `Provisioned DNS but failed to persist the subdomain: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    };
+  }
+
+  ctx.subdomain = ctx.slug;
+  ctx.subdomainCnameRecordId = recordId;
+
   return {
     status: "succeeded",
-    // Created nothing, so there is nothing to undo on rollback.
-    rollbackable: false,
-    details: { note: "auto-wired by Render at service creation time" },
+    platform: "cloudflare",
+    rollbackable: true,
+    resourceId: recordId,
+    details: { subdomain: ctx.slug, fullUrl, recordId, renderHostname },
   };
 }
 
-// --- step f: inject env vars (no-op for Sprint 4) ---------------------------
+// --- step f: inject env vars onto the Render service ------------------------
 
-// Real env-var injection needs the deployed URL, which needs DNS automation —
-// out of scope for Sprint 4. Activates with the Sprint 5 DNS + Auth0 wiring.
+// Merge DATABASE_URL (from Vault, via ctx), NODE_ENV, and PROJECT_NAME into the
+// Render service's env vars. Render's env-vars endpoint is total-replace, so we
+// fetch the current set, overlay our three keys, and PUT the union back. The
+// step is rollbackable as platform "render" + step name inject_env_vars, which
+// the orchestrator routes to a fetch-filter-put removal of just our keys.
+const INJECTED_ENV_KEYS = ["DATABASE_URL", "NODE_ENV", "PROJECT_NAME"] as const;
+
 export async function injectEnvVars(
-  _ctx: GenesisContext,
+  ctx: GenesisContext,
 ): Promise<GenesisStepResult> {
+  const connectionString = ctx.databaseConnectionString;
+  if (!connectionString) {
+    return {
+      status: "failed",
+      errorMessage:
+        "No database connection string in context — create_supabase_project must succeed before env injection.",
+    };
+  }
+
+  const serviceId = ctx.results.create_render_service?.resourceId;
+  if (!serviceId) {
+    return {
+      status: "failed",
+      errorMessage:
+        "No Render service id in context — create_render_service must succeed before env injection.",
+    };
+  }
+
+  const current = await getServiceEnvVars(ctx.credentials.render, serviceId);
+  if (!current.success) {
+    return {
+      status: "failed",
+      errorMessage:
+        current.errorMessage ?? "Failed to read the Render service's env vars.",
+    };
+  }
+
+  // Our values (DATABASE_URL holds the secret — kept out of the event details).
+  const ourVars: RenderEnvVar[] = [
+    { key: "DATABASE_URL", value: connectionString },
+    { key: "NODE_ENV", value: "production" },
+    { key: "PROJECT_NAME", value: ctx.name },
+  ];
+  const ourKeys = new Set(ourVars.map((v) => v.key));
+  const merged = [
+    ...(current.envVars ?? []).filter((v) => !ourKeys.has(v.key)),
+    ...ourVars,
+  ];
+
+  const put = await putServiceEnvVars(ctx.credentials.render, serviceId, merged);
+  if (!put.success) {
+    return {
+      status: "failed",
+      errorMessage:
+        put.errorMessage ?? "Failed to update the Render service's env vars.",
+    };
+  }
+
+  ctx.renderEnvVarKeys = [...INJECTED_ENV_KEYS];
+
   return {
     status: "succeeded",
-    // Created nothing, so there is nothing to undo on rollback.
-    rollbackable: false,
-    details: {
-      note: "env var injection deferred to Sprint 5 (DNS + Auth0 wiring)",
-    },
+    platform: "render",
+    rollbackable: true,
+    resourceId: serviceId,
+    // keysSet only — never the DATABASE_URL value.
+    details: { keysSet: ctx.renderEnvVarKeys },
   };
 }
 

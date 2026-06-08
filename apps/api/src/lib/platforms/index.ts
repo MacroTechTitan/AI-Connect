@@ -19,6 +19,11 @@ export {
   waitUntilReady as supabaseWaitUntilReady,
   buildConnectionString as supabaseBuildConnectionString,
 } from "./supabase.js";
+export {
+  getServiceEnvVars,
+  putServiceEnvVars,
+} from "./render.js";
+export type { RenderEnvVar } from "./render.js";
 export { getCloudflareClient } from "./cloudflare.js";
 export type {
   CloudflareClient,

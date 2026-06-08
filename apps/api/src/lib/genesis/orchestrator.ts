@@ -8,7 +8,10 @@ import {
 } from "../../db/schema.js";
 import { logSystem } from "../logging.js";
 import {
+  getCloudflareClient,
   getPlatformClient,
+  getServiceEnvVars,
+  putServiceEnvVars,
   type Platform,
   type ValidatedIdentity,
 } from "../platforms/index.js";
@@ -18,7 +21,20 @@ import type {
   GenesisContext,
   GenesisStepName,
   GenesisStepResult,
+  TemplateChoice,
 } from "./types.js";
+
+const TEMPLATE_CHOICES: readonly TemplateChoice[] = [
+  "html-js",
+  "sveltekit",
+  "nextjs",
+];
+
+function asTemplateChoice(value: string): TemplateChoice | undefined {
+  return (TEMPLATE_CHOICES as readonly string[]).includes(value)
+    ? (value as TemplateChoice)
+    : undefined;
+}
 
 type Db = ReturnType<typeof getDb>;
 
@@ -160,7 +176,7 @@ async function markFailedToRollback(
 // cleanup the API couldn't. Stored in the rollback event's details for the SSE
 // consumer (5c) / future "stuck genesis" UI to surface as a clickable link.
 function manualCleanupUrl(
-  platform: Platform,
+  platform: Platform | "cloudflare",
   result: GenesisStepResult,
 ): string | undefined {
   const resourceId = result.resourceId;
@@ -191,7 +207,57 @@ function manualCleanupUrl(
       }
       return "https://vercel.com/dashboard";
     }
+    case "cloudflare":
+      // No per-record deep link without the account/zone slug — point at the
+      // DNS dashboard; the event details carry the record id + subdomain.
+      return "https://dash.cloudflare.com/";
   }
+}
+
+// Rollback for the inject_env_vars step: Render has no per-id env-var delete, so
+// we fetch the current set, drop the keys this run set (recorded in
+// details.keysSet), and PUT the remainder back. Best-effort by design — if it
+// fails, the create_render_service rollback that runs later in the reverse walk
+// deletes the whole service, taking the orphaned vars with it.
+async function rollbackRenderEnvVars(
+  ctx: GenesisContext,
+  result: GenesisStepResult,
+): Promise<{ deleted: boolean; errorMessage?: string }> {
+  const serviceId = result.resourceId;
+  if (!serviceId) {
+    return {
+      deleted: false,
+      errorMessage: "No Render service id to roll injected env vars back on.",
+    };
+  }
+  const rawKeys = result.details?.keysSet;
+  const keysSet = Array.isArray(rawKeys)
+    ? rawKeys.filter((k): k is string => typeof k === "string")
+    : [];
+  const current = await getServiceEnvVars(ctx.credentials.render, serviceId);
+  if (!current.success) {
+    return {
+      deleted: false,
+      errorMessage:
+        current.errorMessage ?? "Failed to read Render env vars for rollback.",
+    };
+  }
+  const remaining = (current.envVars ?? []).filter(
+    (v) => !keysSet.includes(v.key),
+  );
+  const put = await putServiceEnvVars(
+    ctx.credentials.render,
+    serviceId,
+    remaining,
+  );
+  if (!put.success) {
+    return {
+      deleted: false,
+      errorMessage:
+        put.errorMessage ?? "Failed to remove the injected env vars.",
+    };
+  }
+  return { deleted: true };
 }
 
 // Reverse-order, best-effort teardown of everything the run created before the
@@ -238,16 +304,25 @@ async function rollback(
     );
     await markInProgress(db, eventId);
 
-    let deleteResult;
+    let deleteResult: { deleted: boolean; errorMessage?: string };
     try {
-      deleteResult = await getPlatformClient(platform).deleteResource(
-        ctx.credentials[platform],
-        resourceId,
-      );
+      if (platform === "cloudflare") {
+        // Env-level Cloudflare client (not a PlatformClient, no per-user creds).
+        deleteResult = await getCloudflareClient().deleteSubdomainCname(
+          resourceId,
+        );
+      } else if (platform === "render" && step.name === "inject_env_vars") {
+        deleteResult = await rollbackRenderEnvVars(ctx, result);
+      } else {
+        deleteResult = await getPlatformClient(platform).deleteResource(
+          ctx.credentials[platform],
+          resourceId,
+        );
+      }
     } catch (err) {
       deleteResult = {
         deleted: false,
-        errorMessage: `Unexpected error deleting ${platform} resource: ${
+        errorMessage: `Unexpected error rolling back ${platform} resource: ${
           err instanceof Error ? err.message : String(err)
         }`,
       };
@@ -287,6 +362,7 @@ interface ProjectRow {
   slug: string;
   organizationId: string;
   createdByUserId: string;
+  templateChoice: string;
 }
 
 // Builds the GenesisContext or, for an expected terminal condition (missing or
@@ -374,10 +450,11 @@ async function buildContext(
     organizationId: project.organizationId,
     name: project.name,
     slug: project.slug,
-    // Sprint 4 MVP creates an auto-init'd empty repo; template-based scaffolding
-    // (cloning a starter) arrives in a later sprint. The field exists now so
-    // step signatures stay stable when it does.
+    // Legacy field retained from Sprint 4; superseded by templateChoice below.
     templateRepoUrl: "",
+    // Sprint 5: the GitHub step generates from this template (or falls back to
+    // an empty auto_init repo when unset/invalid).
+    templateChoice: asTemplateChoice(project.templateChoice),
     credentials,
     validated,
     results: {},
@@ -500,6 +577,7 @@ export async function runGenesis(projectId: string): Promise<void> {
         slug: projects.slug,
         organizationId: projects.organizationId,
         createdByUserId: projects.createdByUserId,
+        templateChoice: projects.templateChoice,
       })
       .from(projects)
       .where(eq(projects.id, projectId))
