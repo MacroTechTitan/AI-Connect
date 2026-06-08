@@ -206,6 +206,19 @@ Issues identified during Sprint 4 build worth tracking:
 
 - Validate-key-on-add for AI providers: still deferred from Sprint 2.5 — when users add an Anthropic/OpenAI key in /api/keys, we should fire a tiny test call before storing to catch deprecated-model or bad-token errors at registration time, matching what Sprint 4 does for platform credentials.
 
+### Sprint 5 follow-ups (target: Sprint 5.5 / Sprint 6+)
+
+- Supabase quota_exceeded UX: when a user has 2 active Supabase free-tier projects and tries to provision a 3rd, surface a helpful UI message explaining the cap + their options (upgrade to Pro, delete an existing project, switch Supabase orgs). Issue captured in Sprint 5 planning.
+- Supabase paused-project detection: free-tier projects auto-pause after 7 days of inactivity. AI Connect should detect this when interacting with a project and surface "click to unpause" in the UI. Issue captured in Sprint 5 planning.
+- Multi-org Supabase selection: validate() returns the first org from the PAT's list. Users with multiple Supabase orgs should be able to pick which to provision into. Workaround for Sprint 5: create a dedicated AI Connect Supabase org.
+- Multi-account Supabase (Sprint 7-8): let users register multiple Supabase PATs and pick per-project. Architecturally significant — touches credentials model, provisioning UI, project creation flow.
+- Cloudflare token rotation reminder: the Cloudflare API token has no expiration. AI Connect operators should rotate it periodically. No code change, just operational discipline.
+- Resource cleanup on project DELETE: still deferred from Sprint 4. AI Connect's DELETE /api/projects/:id only removes the DB row; cloud resources (now including Cloudflare CNAME and Vault secret) remain. Add an opt-in "delete all" flow.
+- Render env var rollback edge case: if injectEnvVars fails AFTER successfully writing some vars, the soft-failure pattern relies on create_render_service rollback to delete the service entirely. If the service deletion also fails, those env vars stay orphan. Low impact (Render service exists, env vars are cosmetic).
+- Custom user domains: Sprint 5 ships shared AI Connect domain only. Users wanting their own domain need to manually wire DNS post-provision. Sprint 6+ should support "use my own domain" with a CNAME-from-user's-DNS pattern.
+- Vault secret cleanup: Sprint 5's database_connection_string_vault_id references a Vault secret that becomes orphan after project DELETE. Not a correctness issue but Vault grows over time.
+- DNS propagation delays: Sprint 5 doesn't wait for DNS to actually propagate before declaring success. Most users will hit the subdomain within minutes of provisioning. Could add a final "verify DNS resolves" step after wire_github_to_render for paranoid completeness.
+
 ## Rejected / out of scope (named so they don't come back)
 
 - **AI Connect as a hosted IDE.** Reproducing Cursor/VS Code is multi-year work with no defensibility. AI Connect integrates with IDEs, not becomes one.
@@ -214,4 +227,4 @@ Issues identified during Sprint 4 build worth tracking:
 
 ---
 
-*Last updated: 2026-06-04*
+*Last updated: 2026-06-08*
