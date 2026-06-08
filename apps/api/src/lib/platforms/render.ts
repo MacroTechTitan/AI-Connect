@@ -278,6 +278,108 @@ async function deleteResource(
   }
 }
 
+// --- Sprint 5: env-var read/replace (standalone, not part of PlatformClient) -
+// Render's env-vars endpoint is total-replace, not partial-update: the orchestrator
+// must GET the current set, merge/filter, then PUT the whole thing back. These two
+// helpers wrap that so both the inject step and its rollback share one code path.
+
+export interface RenderEnvVar {
+  key: string;
+  value: string;
+}
+
+interface RenderEnvVarItem {
+  envVar?: { key?: string; value?: string };
+}
+
+// Fetch the service's current env vars, normalized to {key, value}. Items
+// without a plain string value (e.g. Render-generated values) are skipped —
+// fresh genesis services don't have any, and we only ever round-trip the
+// plain key/value pairs we manage.
+export async function getServiceEnvVars(
+  credential: string,
+  serviceId: string,
+): Promise<{ success: boolean; envVars?: RenderEnvVar[]; errorMessage?: string }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(
+      `${RENDER_API}/services/${serviceId}/env-vars?limit=100`,
+      {
+        headers: { Authorization: `Bearer ${credential}` },
+        signal: controller.signal,
+      },
+    );
+    if (res.status === 401 || res.status === 403) {
+      return { success: false, errorMessage: "Render auth failed" };
+    }
+    if (!res.ok) {
+      const errBody = (await res.json().catch(() => ({}))) as RenderErrorBody;
+      return {
+        success: false,
+        errorMessage:
+          errBody.message ??
+          `Render returned HTTP ${res.status} listing env vars.`,
+      };
+    }
+    const body = (await res.json()) as RenderEnvVarItem[];
+    const envVars: RenderEnvVar[] = [];
+    for (const item of body) {
+      const key = item.envVar?.key;
+      const value = item.envVar?.value;
+      if (typeof key === "string" && typeof value === "string") {
+        envVars.push({ key, value });
+      }
+    }
+    return { success: true, envVars };
+  } catch (err) {
+    return { success: false, errorMessage: networkErrorMessage(err) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// Replace ALL of the service's env vars with the given set (Render's PUT is a
+// total replace). Callers are responsible for having merged in the current set.
+export async function putServiceEnvVars(
+  credential: string,
+  serviceId: string,
+  envVars: RenderEnvVar[],
+): Promise<{ success: boolean; errorMessage?: string }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(`${RENDER_API}/services/${serviceId}/env-vars`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${credential}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(
+        envVars.map((v) => ({ key: v.key, value: v.value })),
+      ),
+      signal: controller.signal,
+    });
+    if (res.status === 401 || res.status === 403) {
+      return { success: false, errorMessage: "Render auth failed" };
+    }
+    if (!res.ok) {
+      const errBody = (await res.json().catch(() => ({}))) as RenderErrorBody;
+      return {
+        success: false,
+        errorMessage:
+          errBody.message ??
+          `Render returned HTTP ${res.status} updating env vars.`,
+      };
+    }
+    return { success: true };
+  } catch (err) {
+    return { success: false, errorMessage: networkErrorMessage(err) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export const renderClient: PlatformClient = {
   validate,
   createResource,

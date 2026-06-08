@@ -72,6 +72,15 @@ export const projects = pgTable(
     provisioningState: text("provisioning_state")
       .notNull()
       .default("not_started"),
+    // Which Project Genesis template the user picked at creation time.
+    // Existing projects default to 'html-js' (the simplest template).
+    templateChoice: text("template_choice").notNull().default("html-js"),
+    // Provisioned subdomain (e.g. 'aic-smoke-test'); the full URL is built at
+    // runtime by appending CLOUDFLARE_BASE_DOMAIN. NULL until DNS is wired.
+    subdomain: text("subdomain"),
+    // References a vault.secrets entry holding the project's Supabase Postgres
+    // connection string. NULL until create_supabase_project captures it.
+    databaseConnectionStringVaultId: uuid("database_connection_string_vault_id"),
     createdByUserId: uuid("created_by_user_id")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
@@ -87,6 +96,10 @@ export const projects = pgTable(
       "projects_provisioning_state_check",
       sql`${table.provisioningState} IN ('not_started', 'provisioning', 'provisioned', 'failed', 'rolled_back')`,
     ),
+    templateChoiceCheck: check(
+      "projects_template_choice_check",
+      sql`${table.templateChoice} IN ('html-js', 'sveltekit', 'nextjs')`,
+    ),
     organizationIdIdx: index("idx_projects_organization_id").on(
       table.organizationId,
     ),
@@ -95,9 +108,13 @@ export const projects = pgTable(
       table.organizationId,
       table.slug,
     ),
+    subdomainUnique: unique("projects_subdomain_unique").on(table.subdomain),
     provisioningStateIdx: index("idx_projects_provisioning_state")
       .on(table.provisioningState)
       .where(sql`${table.provisioningState} != 'not_started'`),
+    subdomainIdx: index("idx_projects_subdomain")
+      .on(table.subdomain)
+      .where(sql`${table.subdomain} IS NOT NULL`),
   }),
 );
 

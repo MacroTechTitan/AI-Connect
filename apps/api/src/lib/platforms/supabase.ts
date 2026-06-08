@@ -95,6 +95,12 @@ async function createResource(
     };
   }
 
+  // Capture once: TS would re-widen req.dbPass to string|undefined after the
+  // awaited fetch below, and this is the value we echo back so the orchestrator
+  // can build the connection string (Supabase never exposes it again).
+  const dbPass = req.dbPass;
+  const region = req.region ?? "us-east-2";
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
@@ -106,9 +112,9 @@ async function createResource(
       },
       body: JSON.stringify({
         name: req.name,
-        region: req.region ?? "us-east-2",
+        region,
         organization_id: req.organizationId,
-        db_pass: req.dbPass,
+        db_pass: dbPass,
         plan: "free",
       }),
       signal: controller.signal,
@@ -191,8 +197,15 @@ async function createResource(
       details: {
         id: project.id,
         name: project.name,
-        region: project.region,
+        // Fall back to the requested region; Supabase doesn't always echo it,
+        // and the orchestrator needs it to build the connection string.
+        region: project.region ?? region,
         status: project.status ?? "COMING_UP",
+        // The generated Postgres password. Supabase's API will not return this
+        // again post-creation, so the orchestrator must capture it here to
+        // construct DATABASE_URL later. Lives only in the in-memory result and
+        // is encrypted straight to Vault by the orchestrator — never logged.
+        dbPass,
       },
     };
   } catch (err) {
@@ -246,6 +259,107 @@ async function deleteResource(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// Supabase project creation is asynchronous: the create call returns while the
+// project is still COMING_UP (30-90s to ACTIVE_HEALTHY). These two helpers are
+// Supabase-specific (not part of PlatformClient) and let the Sprint 5
+// orchestrator wait for readiness, then build the Postgres connection string
+// from the pieces createResource handed back.
+
+const READY_INTERVAL_MS = 5_000;
+const READY_TIMEOUT_MS = 120_000;
+// Terminal statuses that mean the project will never come up — bail immediately.
+const FAILED_STATUSES = new Set(["INIT_FAILED", "REMOVED", "RESTORE_FAILED"]);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Polls the project's status until it reaches ACTIVE_HEALTHY. Transient errors
+// (network blips, 5xx) don't abort the wait — they're retried until the overall
+// deadline. Per-request timeouts count against that deadline, so a hung request
+// can't extend the wait past timeoutMs.
+export async function waitUntilReady(
+  credential: string,
+  projectId: string,
+  options?: { intervalMs?: number; timeoutMs?: number },
+): Promise<{ ready: boolean; status: string; errorMessage?: string }> {
+  const intervalMs = options?.intervalMs ?? READY_INTERVAL_MS;
+  const timeoutMs = options?.timeoutMs ?? READY_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+
+  let lastStatus = "unknown";
+  let lastTransientError: string | undefined;
+
+  while (Date.now() < deadline) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+      const res = await fetch(`${SUPABASE_MGMT_API}/projects/${projectId}`, {
+        headers: { Authorization: `Bearer ${credential}` },
+        signal: controller.signal,
+      });
+
+      if (res.status === 401 || res.status === 403) {
+        return { ready: false, status: "unknown", errorMessage: "Supabase auth failed" };
+      }
+      if (res.status === 404) {
+        return {
+          ready: false,
+          status: "removed",
+          errorMessage: "Supabase project not found (may have been deleted)",
+        };
+      }
+      if (res.ok) {
+        const project = (await res.json()) as SupabaseProject;
+        lastStatus = project.status ?? "unknown";
+        if (lastStatus === "ACTIVE_HEALTHY") {
+          return { ready: true, status: "ACTIVE_HEALTHY" };
+        }
+        if (FAILED_STATUSES.has(lastStatus)) {
+          return {
+            ready: false,
+            status: lastStatus,
+            errorMessage: "Supabase project failed to initialize",
+          };
+        }
+        // COMING_UP / INACTIVE / RESTORING / etc. — keep waiting.
+      } else {
+        // 5xx and other non-terminal codes (e.g. 429) are transient — retry.
+        lastTransientError = `Supabase returned HTTP ${res.status} while polling status.`;
+      }
+    } catch (err) {
+      // Network error or per-request timeout — transient, keep polling.
+      lastTransientError = networkErrorMessage(err);
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await sleep(Math.min(intervalMs, remaining));
+  }
+
+  const base = `Supabase project did not reach ACTIVE_HEALTHY within ${timeoutMs}ms`;
+  return {
+    ready: false,
+    status: lastStatus,
+    errorMessage: lastTransientError
+      ? `${base} (last error: ${lastTransientError})`
+      : base,
+  };
+}
+
+// Pure helper (no API call) that assembles the standard Supabase Postgres
+// pooler connection string from the pieces createResource returns. The
+// orchestrator encrypts the result straight to Vault.
+export function buildConnectionString(
+  projectRef: string,
+  dbPass: string,
+  region: string,
+): string {
+  return `postgresql://postgres.${projectRef}:${dbPass}@aws-0-${region}.pooler.supabase.com:6543/postgres`;
 }
 
 export const supabaseClient: PlatformClient = {

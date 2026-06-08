@@ -24,6 +24,14 @@ const envSchema = z.object({
   // Bypasses Auth0 by design so logs are reachable when Auth0 is broken.
   DIAGNOSTICS_TOKEN: z.string().min(32).optional(),
 
+  // Sprint 5 — Cloudflare DNS for Project Genesis subdomains. These are
+  // AI-Connect-level credentials (not per-user platform credentials): AI
+  // Connect owns the domain and provisions one CNAME per project. Read only
+  // by lib/platforms/cloudflare.ts. Optional so /health boots without them.
+  CLOUDFLARE_API_TOKEN: z.string().optional(),
+  CLOUDFLARE_ZONE_ID: z.string().optional(),
+  CLOUDFLARE_BASE_DOMAIN: z.string().optional(),
+
   // Admin seed — written by lib/seed.ts on boot.
   ADMIN_EMAIL: z.string().email().default("jgelet@macrotechtitan.com"),
 });
