@@ -15,6 +15,10 @@ export type { PlatformClient } from "./interface.js";
 // client. Both sit alongside the Sprint 4 platform abstraction rather than
 // inside the Platform union / PlatformClient interface.
 export { createRepoFromTemplate } from "./github.js";
+export {
+  waitUntilReady as supabaseWaitUntilReady,
+  buildConnectionString as supabaseBuildConnectionString,
+} from "./supabase.js";
 export { getCloudflareClient } from "./cloudflare.js";
 export type {
   CloudflareClient,
