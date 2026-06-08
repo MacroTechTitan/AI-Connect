@@ -214,6 +214,48 @@ The data model is ready: projects exist (Sprint 3), provider keys exist (Sprint 
 ### Sprint 5 starting point
 DNS automation, env var injection, template scaffolding for Project Genesis. Path B of the signup wizard (takeover existing Replit/Lovable/GitHub projects) is also Sprint 5 per the roadmap. Project Genesis is now demo-worthy (a real deployed project in ~10 minutes) but rough around the edges — Sprint 5 fills in the gaps that make it actually useful (custom domains, working env vars, real templates instead of empty repos).
 
+## Sprint 5 — Project Genesis completion (DNS + templates + env injection) (2026-06-08)
+- Branch: sprint/5-genesis-completion (not yet merged at time of writing)
+- 6 sprint commits on the branch: schema (c512e1e), Cloudflare client + GitHub create-from-template (c2bc547), Supabase wait + connection string capture (b402ee2), orchestrator integration (4c6a8fb), project creation UX with template selection (4e237a8), docs (eb02787), this SPRINT_LOG entry (last commit hash assigned at commit time).
+- Plus a standalone strategic thinking doc committed mid-sprint (9832893) — docs/architecture/tool-routing-and-skills.md, NOT Sprint 5 scope, accidentally landed on the sprint branch instead of master. Will ride along on Sprint 5's merge.
+- Migration 0005 (template_choice + subdomain + database_connection_string_vault_id columns on projects) applied to Supabase.
+- Production verification: pending — Sprint 5 smoke test per docs/sprints/SPRINT_5_TESTING.md scheduled for the next session.
+
+### What shipped
+- Three new columns on projects table (no new tables): template_choice (text NOT NULL DEFAULT 'html-js', CHECK in 3 template values), subdomain (text NULLABLE, UNIQUE), database_connection_string_vault_id (uuid NULLABLE). Plus partial index on subdomain WHERE NOT NULL.
+- Cloudflare DNS client (apps/api/src/lib/platforms/cloudflare.ts) — env-level (NOT user-supplied), validates against macrotechtitan.com zone, creates and deletes CNAME records. Architecturally distinct from the 4 PlatformClient implementations because Cloudflare credentials live in Render env vars (AI Connect's own config), not in user-supplied platform_credentials rows.
+- GitHub createRepoFromTemplate (extension to existing client) — uses POST /repos/{template_owner}/{template_repo}/generate. Requires one extra GET /user call upfront to resolve the authenticated user's login (required by GitHub's owner field).
+- Supabase waitUntilReady + buildConnectionString — addresses Sprint 4's async-creation gap. waitUntilReady polls every 5s for up to 2min for ACTIVE_HEALTHY status, with per-request 30s AbortController counting against the deadline. buildConnectionString is a pure helper that constructs postgresql://postgres.{ref}:{pass}@aws-0-{region}.pooler.supabase.com:6543/postgres. createResource extended to return dbPass in details (Supabase's API doesn't expose project passwords post-creation, so capture-at-create-time is the only viable approach).
+- Three template repos at MacroTechTitan/template-html-js, template-sveltekit, template-nextjs — minimal working web apps (~50-150 lines each), all marked as template repositories on GitHub. Set up via PowerShell + gh CLI in one batch script during Sprint 5 prep.
+- Orchestrator integration (apps/api/src/lib/genesis/{steps.ts, orchestrator.ts}): four step changes.
+  - createGithubRepo branches on ctx.templateChoice → createRepoFromTemplate for the 3 templates, falls back to Sprint 4's empty auto_init for legacy projects.
+  - createSupabaseProject now: create → waitUntilReady → buildConnectionString → vault.createSecret → UPDATE projects.database_connection_string_vault_id. Self-cleans the created Supabase project on post-creation failure (e.g., waitUntilReady timeout) to prevent orphans, since Sprint 4's rollback only undoes successful prior steps.
+  - wireGithubToRender (was no-op): provisions Cloudflare CNAME pointing the project's subdomain at the Render onrender.com URL. Same self-cleanup pattern.
+  - injectEnvVars (was no-op): fetches Render's current env vars via GET, merges in DATABASE_URL (from ctx) + NODE_ENV=production + PROJECT_NAME, PUTs back. Render's env-vars API is total-replace, so we read-modify-write rather than a partial update.
+- Rollback extended to handle two non-PlatformClient cases: cloudflare (deleteSubdomainCname) and render+inject_env_vars (read-filter-PUT to remove our specific keys). Rollback failures are soft — if Render env var rollback fails, the subsequent create_render_service rollback deletes the whole service and resolves orphan env vars naturally.
+- Project creation UX: Add project form gains template radio selector with always-visible inline helper text (covers mobile + accessibility in one pattern). Each project row shows "Template: <humanized>" badge and, once subdomain is provisioned, a clickable URL to the live site (the demo moneymaker line).
+- Bundle delta: JS +1.28 KB raw / +0.39 KB gzipped; CSS +0.95 KB raw / +0.20 KB gzipped. Total Sprint 5 bundle delta: ~+2.2 KB raw / ~+0.6 KB gzipped — small because most of Sprint 5's complexity is backend.
+
+### Lessons learned
+- Setup phases for Sprint 5 (Cloudflare zone config, Render env var addition, 3 template repo creation) took meaningful time but were prerequisites that couldn't be deferred. Worth recognizing the "infrastructure-prep before code" pattern for future sprints with similar dependencies (Sprint 6's Auth0 tenant scaffolding will likely have similar prep).
+- Discretion calls by Claude Code on Commit 4 (orchestrator integration) caught real spec bugs: (1) keeping the (ctx) step signature rather than threading a redundant db parameter, (2) adding self-cleanup on post-creation failure in each step to handle the "step fails AFTER creating its resource" gap that Sprint 4's reverse-walk rollback didn't cover. Both were correct architectural calls that improved on the spec. Worth noting that giving Claude Code explicit permission to flag spec deviations was important — without that, the same code would have shipped with a spec-compliant but-worse implementation.
+- The decision to capture per-call credentials at orchestrator runtime (Sprint 4 pattern) made Sprint 5's connection-string-capture work cleanly: the dbPass generated at Supabase create-time stays in memory through wait → connection string → Vault, never persisted as plaintext outside Vault.
+- Manual MCP swap for AI Connect's own Supabase deferred yet again. We're operating with OQ-Supabase MCP connection during AI Connect work, which means NOT calling Supabase MCP for AI Connect database changes (would point at the wrong project). Continued reliance on manual SQL paste workflow for the AI Connect database. Worth swapping eventually but not blocking.
+- The mid-sprint architecture sketch (tool-routing-and-skills.md) was the right idea executed at the wrong time. Captured genuinely useful strategic thinking but interrupted Sprint 5 flow. Future "I just had a strategic thought" moments during a sprint should be captured in 2 lines to a scratch note, not 250 lines to a real architecture doc — the elaboration belongs after the sprint ships.
+- The shared-domain-via-CLOUDFLARE-base-domain pattern (D1 from Sprint 5 planning) is meaningfully simpler than user-brings-domain. Once Sprint 5 ships and the demo works end-to-end, the "click button → working URL in 10 minutes" pitch becomes real, and that pitch is what made the architectural commitment to A worth it.
+
+### Deferred to Sprint 5.5 / Sprint 6+
+See docs/future-ideas.md "Sprint 5 follow-ups" subsection for the full list. Highlights:
+- Supabase quota_exceeded + paused-project + multi-org-selection UX improvements.
+- Multi-account Supabase support (Sprint 7-8).
+- Resource cleanup on project DELETE (still deferred from Sprint 4).
+- Custom user domains (currently shared domain only).
+- Render env var rollback edge cases (low impact).
+- DNS propagation wait step (paranoid completeness).
+
+### Sprint 6 starting point
+Auth0 tenant scaffolding for each provisioned project (per the roadmap). When a user provisions a project, that project gets its own Auth0 tenant + application + user pool, with AUTH0_DOMAIN/AUTH0_CLIENT_ID/AUTH0_AUDIENCE injected into Render env vars (extending the Sprint 5 inject_env_vars step). Plus the Path B work (takeover existing Replit/Lovable/GitHub projects) from the Sprint 5 deferred list — still on the table for Sprint 6 vs 5.5 depending on user signal after Sprint 5 ships.
+
 ---
 
-*Last updated: 2026-06-04*
+*Last updated: 2026-06-08*
