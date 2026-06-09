@@ -16,15 +16,47 @@ export type GenesisStepName =
 // projects.template_choice CHECK constraint.
 export type TemplateChoice = "html-js" | "sveltekit" | "nextjs";
 
-// Static AI-Connect-owned template repos, keyed by template choice. The GitHub
-// step generates a new repo from one of these when ctx.templateChoice is set.
+// Static AI-Connect-owned template repos, keyed by template choice, with the
+// Render build/start config each template needs. Single source of truth for
+// per-template metadata: the GitHub step generates a repo from {owner, repo},
+// and the Render step reads {render.buildCommand, render.startCommand}. Adding a
+// 4th template means adding one entry here and nothing else.
+//
+// All three are web_service with env "node" (carried in render.ts), use npm
+// (not pnpm — these are standalone projects whose lockfiles are npm), and keep
+// Sprint 4's region/plan defaults (oregon, starter).
 export const TEMPLATE_REPOS: Record<
   TemplateChoice,
-  { owner: string; repo: string }
+  {
+    owner: string;
+    repo: string;
+    render: { buildCommand: string; startCommand: string };
+  }
 > = {
-  "html-js": { owner: "MacroTechTitan", repo: "template-html-js" },
-  sveltekit: { owner: "MacroTechTitan", repo: "template-sveltekit" },
-  nextjs: { owner: "MacroTechTitan", repo: "template-nextjs" },
+  "html-js": {
+    owner: "MacroTechTitan",
+    repo: "template-html-js",
+    render: {
+      buildCommand: "npm install",
+      startCommand: "node server.js",
+    },
+  },
+  sveltekit: {
+    owner: "MacroTechTitan",
+    repo: "template-sveltekit",
+    render: {
+      buildCommand: "npm install && npm run build",
+      startCommand: "node build/index.js",
+    },
+  },
+  nextjs: {
+    owner: "MacroTechTitan",
+    repo: "template-nextjs",
+    render: {
+      buildCommand: "npm install && npm run build",
+      startCommand: "npm start",
+    },
+  },
 } as const;
 
 // The outcome a step hands back to the orchestrator. Steps never touch the DB

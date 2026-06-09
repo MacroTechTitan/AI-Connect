@@ -315,12 +315,21 @@ export async function createRenderService(
     };
   }
 
+  // Per-template Render config (TEMPLATE_REPOS is the single source of truth).
+  // Legacy projects with no templateChoice pass undefined, and createResource
+  // falls back to Sprint 4's pnpm/node-dist defaults.
+  const renderConfig = ctx.templateChoice
+    ? TEMPLATE_REPOS[ctx.templateChoice].render
+    : undefined;
+
   const result = await getPlatformClient("render").createResource({
     credential: ctx.credentials.render,
     name: ctx.slug,
     repo: repoUrl,
     branch: "main",
     ownerId,
+    buildCommand: renderConfig?.buildCommand,
+    startCommand: renderConfig?.startCommand,
   });
 
   if (result.status === "success") {

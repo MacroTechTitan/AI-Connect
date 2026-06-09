@@ -104,8 +104,11 @@ async function createResource(
     };
   }
 
-  const buildCommand = "pnpm install && pnpm build";
-  const startCommand = "node dist/index.js";
+  // Sprint 5.5: caller passes per-template build/start commands. Fall back to
+  // Sprint 4's pnpm/node-dist defaults for legacy projects that don't supply
+  // them (no template_choice set).
+  const buildCommand = req.buildCommand ?? "pnpm install && pnpm build";
+  const startCommand = req.startCommand ?? "node dist/index.js";
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
