@@ -383,6 +383,107 @@ export async function putServiceEnvVars(
   }
 }
 
+// --- Sprint 5.5: deploy-status read (standalone, not part of PlatformClient) -
+// verify_deployment polls this instead of the public URL so it can distinguish
+// "still building" from "deploy crashed" and fast-fail on terminal states. The
+// typed status union is documentation (Render's known states); rawStatus is the
+// source of truth and may carry any string Render returns.
+
+export type RenderDeployStatus =
+  | "live"
+  | "build_in_progress"
+  | "update_in_progress"
+  | "build_failed"
+  | "update_failed"
+  | "canceled"
+  | "deactivated"
+  | "pre_deploy_in_progress"
+  | "pre_deploy_failed"
+  | "auth_failed"
+  | "not_found"
+  | (string & {});
+
+export interface RenderDeployResult {
+  status: RenderDeployStatus;
+  errorMessage?: string;
+  finishedAt?: string;
+  rawStatus: string;
+}
+
+interface RenderDeployItem {
+  deploy?: {
+    id?: string;
+    status?: string;
+    finishedAt?: string;
+  };
+}
+
+// Fetch the service's most recent deploy and surface its status. Returns the
+// distinct auth_failed / not_found sentinels for 401/403 and 404 so the caller
+// can give a precise error rather than a generic polling timeout.
+export async function getLatestDeploy(
+  credential: string,
+  serviceId: string,
+): Promise<RenderDeployResult> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(
+      `${RENDER_API}/services/${serviceId}/deploys?limit=1`,
+      {
+        headers: { Authorization: `Bearer ${credential}` },
+        signal: controller.signal,
+      },
+    );
+    if (res.status === 401 || res.status === 403) {
+      return {
+        status: "auth_failed",
+        errorMessage: "Render auth failed",
+        rawStatus: "auth_failed",
+      };
+    }
+    if (res.status === 404) {
+      return {
+        status: "not_found",
+        errorMessage: "Render service not found",
+        rawStatus: "not_found",
+      };
+    }
+    if (!res.ok) {
+      const errBody = (await res.json().catch(() => ({}))) as RenderErrorBody;
+      return {
+        status: `http_${res.status}`,
+        errorMessage:
+          errBody.message ??
+          `Render returned HTTP ${res.status} listing deploys.`,
+        rawStatus: `http_${res.status}`,
+      };
+    }
+    const body = (await res.json()) as RenderDeployItem[];
+    const deploy = body[0]?.deploy;
+    if (!deploy || typeof deploy.status !== "string") {
+      return {
+        status: "unknown",
+        errorMessage: "Render returned no deploy for this service.",
+        rawStatus: "unknown",
+      };
+    }
+    return {
+      status: deploy.status,
+      finishedAt: deploy.finishedAt,
+      rawStatus: deploy.status,
+    };
+  } catch (err) {
+    return {
+      status: "network_error",
+      errorMessage: networkErrorMessage(err),
+      rawStatus: "network_error",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export const renderClient: PlatformClient = {
   validate,
   createResource,

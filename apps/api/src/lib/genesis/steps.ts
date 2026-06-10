@@ -5,12 +5,14 @@ import { eq } from "drizzle-orm";
 import { getDb } from "../../db/client.js";
 import { projects } from "../../db/schema.js";
 import { env } from "../env.js";
+import { logSystem } from "../logging.js";
 import {
   createRepoFromTemplate,
   getCloudflareClient,
   getPlatformClient,
   getServiceEnvVars,
   putServiceEnvVars,
+  renderGetLatestDeploy,
   supabaseBuildConnectionString,
   supabaseWaitUntilReady,
   type PlatformActionResult,
@@ -516,49 +518,128 @@ export async function injectEnvVars(
 
 // --- step g: verify the deployment is live ---------------------------------
 
-const VERIFY_TIMEOUT_MS = 5 * 60_000;
+// Sprint 5.5 Commit 2: poll Render's deploys API for the real deploy status
+// instead of hammering the public URL for a 200. This lets us fast-fail on
+// terminal states (build_failed, etc.) within seconds with Render's own status,
+// rather than burning the full deadline polling a URL that will never come up.
+//
+// The deadline is 8 minutes (up from 5) — but it's only consumed by unhealthy
+// deploys; healthy ones reach "live" in 2-4 minutes. The longer window trades
+// total wait time for fewer false-positive failures.
+const VERIFY_TIMEOUT_MS = 8 * 60_000;
 const VERIFY_POLL_INTERVAL_MS = 10_000;
 const VERIFY_REQUEST_TIMEOUT_MS = 10_000;
+
+// Terminal failure states — stop polling immediately, the deploy is dead.
+const RENDER_FAILED_STATES = new Set([
+  "build_failed",
+  "update_failed",
+  "canceled",
+  "pre_deploy_failed",
+]);
+// In-progress states — keep polling. Any unknown status is treated the same way
+// (conservative: never fail on a status we don't recognize).
+const RENDER_IN_PROGRESS_STATES = new Set([
+  "build_in_progress",
+  "update_in_progress",
+  "pre_deploy_in_progress",
+]);
 
 export async function verifyDeployment(
   ctx: GenesisContext,
 ): Promise<GenesisStepResult> {
   const url = detailString(ctx, "create_render_service", "url");
-  if (!url) {
+  const serviceId = ctx.results.create_render_service?.resourceId;
+  if (!serviceId || !url) {
     return {
       status: "failed",
       errorMessage:
-        "No Render service URL was returned at creation time — cannot verify the deployment. Check the Render dashboard for build status.",
+        "No Render service id/URL was returned at creation time — cannot verify the deployment. Check the Render dashboard for build status.",
     };
   }
+  const credential = ctx.credentials.render;
+  const logsUrl = `https://dashboard.render.com/web/${serviceId}/logs`;
 
   const deadline = Date.now() + VERIFY_TIMEOUT_MS;
   let attempts = 0;
+  let lastStatus = "unknown";
   while (Date.now() < deadline) {
     attempts++;
-    const reqStart = Date.now();
-    try {
-      const res = await fetch(url, {
-        method: "GET",
-        signal: AbortSignal.timeout(VERIFY_REQUEST_TIMEOUT_MS),
-      });
-      if (res.status === 200) {
+    const deploy = await renderGetLatestDeploy(credential, serviceId);
+    lastStatus = deploy.rawStatus;
+
+    if (deploy.status === "live") {
+      // Belt-and-suspenders: Render reports live, but give the edge a moment by
+      // confirming the public URL actually answers 200. A brief propagation
+      // delay can leave the URL returning 502/503/404 right after "live".
+      const reqStart = Date.now();
+      try {
+        const res = await fetch(url, {
+          method: "GET",
+          signal: AbortSignal.timeout(VERIFY_REQUEST_TIMEOUT_MS),
+        });
+        if (res.status !== 200) {
+          return {
+            status: "failed",
+            errorMessage: `Render reports deploy live but service URL returned ${res.status}. Service may still be starting up.`,
+          };
+        }
+      } catch {
         return {
-          status: "succeeded",
-          // Read-only probe — nothing was created, nothing to roll back.
-          rollbackable: false,
-          details: {
-            url,
-            statusCode: 200,
-            latencyMs: Date.now() - reqStart,
-            attempts,
-          },
+          status: "failed",
+          errorMessage:
+            "Render reports deploy live but service URL did not respond. Service may still be starting up.",
         };
       }
-    } catch {
-      // Service not reachable yet (build in progress, cold DNS, timeout) —
-      // swallow and poll again until the deadline.
+      return {
+        status: "succeeded",
+        // Read-only probe — nothing was created, nothing to roll back.
+        rollbackable: false,
+        details: {
+          url,
+          deployStatus: "live",
+          finishedAt: deploy.finishedAt ?? null,
+          latencyMs: Date.now() - reqStart,
+          attempts,
+        },
+      };
     }
+
+    if (RENDER_FAILED_STATES.has(deploy.status)) {
+      return {
+        status: "failed",
+        errorMessage: `Render deploy failed (status: ${deploy.status}). Check build logs at ${logsUrl}`,
+      };
+    }
+    if (deploy.status === "deactivated") {
+      return {
+        status: "failed",
+        errorMessage: "Render service has been deactivated",
+      };
+    }
+    if (deploy.status === "auth_failed") {
+      return {
+        status: "failed",
+        errorMessage: "Render credential rejected during verification",
+      };
+    }
+    if (deploy.status === "not_found") {
+      return {
+        status: "failed",
+        errorMessage: "Render service not found during verification",
+      };
+    }
+    // In-progress or any unknown status: keep polling. Unknown statuses are
+    // logged so a new Render state shows up in the genesis logs.
+    if (!RENDER_IN_PROGRESS_STATES.has(deploy.status)) {
+      await logSystem(
+        "warn",
+        "genesis",
+        `verify_deployment: unrecognized Render deploy status '${deploy.status}' — treating as in-progress and continuing to poll.`,
+        { projectId: ctx.projectId, serviceId, rawStatus: deploy.rawStatus },
+      );
+    }
+
     if (Date.now() + VERIFY_POLL_INTERVAL_MS < deadline) {
       await sleep(VERIFY_POLL_INTERVAL_MS);
     } else {
@@ -568,7 +649,7 @@ export async function verifyDeployment(
 
   return {
     status: "failed",
-    errorMessage: `Deployment took longer than 5 minutes to come up. The Render service URL is ${url} — check the Render dashboard for build status.`,
+    errorMessage: `Render deploy did not reach 'live' status within 8 minutes (last status: ${lastStatus}). Check build logs at ${logsUrl}`,
   };
 }
 

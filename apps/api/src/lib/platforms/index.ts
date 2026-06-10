@@ -22,8 +22,9 @@ export {
 export {
   getServiceEnvVars,
   putServiceEnvVars,
+  getLatestDeploy as renderGetLatestDeploy,
 } from "./render.js";
-export type { RenderEnvVar } from "./render.js";
+export type { RenderEnvVar, RenderDeployResult, RenderDeployStatus } from "./render.js";
 export { getCloudflareClient } from "./cloudflare.js";
 export type {
   CloudflareClient,
