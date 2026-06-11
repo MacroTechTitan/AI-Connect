@@ -20,6 +20,9 @@ export interface PlatformCreateResourceRequest {
   repo?: string;
   branch?: string;
   ownerId?: string;
+  // Per-template build/start commands (Sprint 5.5). Omitted → Sprint 4 defaults.
+  buildCommand?: string;
+  startCommand?: string;
 
   // Supabase
   region?: string;

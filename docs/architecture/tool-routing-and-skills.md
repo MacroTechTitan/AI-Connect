@@ -45,6 +45,73 @@ Sometimes these get conflated. They're related but distinct.
 
 ---
 
+## Idea 4: Command Center UI (added 2026-06-09)
+
+**Triggering thought:** mid-Sprint-5.5, the founder articulated that AI Connect's eventual UI should look "like Cursor on the front end" — a tabbed command center for managing service connections, not an IDE.
+
+### The shape
+
+A single window. Tabs along the top for each service connected to the active project. Active tab shows that service's relevant data and status.
+
+Mock layout:
+
+    ┌─────────────────────────────────────────────────────────┐
+    │ [Project] OQ ▼ │ Deal Match │ AI Connect │ + New tab   │
+    ├─────────────────────────────────────────────────────────┤
+    │ Service tabs:                                            │
+    │ [Supabase] [Render] [Vercel] [GitHub] [Cloudflare]      │
+    │ [Auth0] [Stripe] [Logs] [Costs] [Settings]              │
+    ├─────────────────────────────────────────────────────────┤
+    │                                                          │
+    │  (active tab content — embed of that service's dashboard │
+    │   OR AI Connect's own view of that service's data)       │
+    │                                                          │
+    └─────────────────────────────────────────────────────────┘
+
+Project selector across multi-project portfolios. Service tabs per project. Each tab surfaces that service's status + recent activity + deep link to the real dashboard.
+
+### Why this matters
+
+1. It's the concrete shape of the "Build and Ship" framing. Not an IDE (Cursor does that). Not a SaaS generator (Lovable does that). Not a deploy platform (Vercel does that). It's the missing connective layer between code editor and deployed app — the place where service-to-service wiring is visible and fixable.
+
+2. It matches the founder's actual workflow. ~30+ open tabs across Vercel, Render, GitHub, Supabase, Cloudflare, Auth0, Stripe dashboards is the status quo. AI Connect's command center collapses these into one window.
+
+3. It naturally absorbs tool routing and composable skills (Ideas 1 and 2). Tool routing is "which tab handles this task." Composable skills are "install this set of services as a bundle." Both fit the tab paradigm cleanly.
+
+### Implementation approaches
+
+How to populate each service tab. Three options:
+
+**A. Iframe embed of the service's dashboard.** Pros: full functionality immediately. Cons: most services set X-Frame-Options to prevent iframe embedding. Won't work for most.
+
+**B. Rebuild each service's UI inside AI Connect via their API.** Pros: full control, consistent design, can show cross-service info. Cons: massive engineering — Supabase alone has dozens of screens we'd be rebuilding.
+
+**C. Hybrid: summary view + deep link.** Each tab shows status + last activity + key metrics from APIs, plus a prominent "Open in <Service>" button. Pros: realistic scope, still genuinely useful. Cons: still meaningful API work per service.
+
+**Recommendation: C.** It's the only shippable scope. The value isn't in replacing the service dashboards — it's in seeing all of them at a glance in one place and knowing where to drill deeper.
+
+### Sprint sequencing implications
+
+This isn't Sprint 5.5 work. The command center UI is probably Sprint 7-9 territory — meaningful frontend work that builds on Sprint 6's Auth0 + 7's Stripe + 8's tool routing.
+
+But the architectural decision matters NOW for sprints in between:
+
+- **Project data model:** projects should treat "connected services" as the primary shape. Sprint 4-5 already model projects this way (GitHub repo + Vercel + Render + Supabase per project) — keep this pattern as Sprint 6+ adds Auth0 and Stripe.
+- **API surface:** each service's status should be queryable independently so future tabs can fetch their data without coupling to provisioning state. Currently AI Connect's GET /api/projects returns a flat row; future GET /api/projects/:id/services/:service should return per-service status.
+- **Frontend architecture:** the current single-page settings panel is a placeholder. Sprint 7-9 should rebuild around the tabbed shape. Worth not adding too much polish to the current UI in the meantime — minimize sunk cost when the rewrite comes.
+
+### What this is NOT
+
+The command center is not:
+- An IDE (Cursor / VS Code already excel here)
+- A code editor (no file tree, no text editing)
+- A SaaS storefront (no landing pages, no marketing site builder)
+- A no-code app builder (no drag-and-drop UI builder)
+
+It's specifically the **service connection layer** that AI-built apps need but don't have a great tool for.
+
+---
+
 ## Strategic Question
 
 AI Connect's current positioning (per Sprint 0.5's vision doc): "the methodology + orchestration layer for AI-assisted dev." 
@@ -171,6 +238,7 @@ That's a 3-tool routing. Useful as a starting point if/when B becomes a sprint.
 ## Decision Log
 
 - **2026-06-06:** Captured initial thinking. Decision deferred until Sprint 5 + 6 + 7 ship.
+- **2026-06-09:** Command Center UI added to the architecture sketch as Idea 4. Sprint sequencing: Sprint 7-9 territory. Sprint 5.5 (current) and Sprint 6 (Auth0) continue as planned; their data model and API surface decisions should anticipate the command center destination.
 - **TBD:** Revisit after Sprint 9-10 with a discovery sprint.
 
 ---
