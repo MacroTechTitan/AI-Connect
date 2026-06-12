@@ -529,6 +529,11 @@ export async function injectEnvVars(
 const VERIFY_TIMEOUT_MS = 8 * 60_000;
 const VERIFY_POLL_INTERVAL_MS = 10_000;
 const VERIFY_REQUEST_TIMEOUT_MS = 10_000;
+// Sprint 5.6: Render's "live" status is reliable but the public URL often needs
+// another ~10-60s before it actually serves 200 (the Node process is still
+// accepting its first connection on $PORT). Retry the post-live 200-check up to
+// 6 times, sleeping VERIFY_POLL_INTERVAL_MS between attempts (~60s of grace).
+const VERIFY_POSTLIVE_MAX_ATTEMPTS = 6;
 
 // Terminal failure states — stop polling immediately, the deploy is dead.
 const RENDER_FAILED_STATES = new Set([
@@ -569,39 +574,57 @@ export async function verifyDeployment(
     lastStatus = deploy.rawStatus;
 
     if (deploy.status === "live") {
-      // Belt-and-suspenders: Render reports live, but give the edge a moment by
-      // confirming the public URL actually answers 200. A brief propagation
-      // delay can leave the URL returning 502/503/404 right after "live".
-      const reqStart = Date.now();
-      try {
-        const res = await fetch(url, {
-          method: "GET",
-          signal: AbortSignal.timeout(VERIFY_REQUEST_TIMEOUT_MS),
-        });
-        if (res.status !== 200) {
-          return {
-            status: "failed",
-            errorMessage: `Render reports deploy live but service URL returned ${res.status}. Service may still be starting up.`,
-          };
+      // Belt-and-suspenders: Render reports live reliably, but the public URL
+      // often needs another ~10-60s before it actually answers 200 (the app is
+      // still accepting its first connection on $PORT). Retry the 200-check up
+      // to VERIFY_POSTLIVE_MAX_ATTEMPTS times before declaring failure — a
+      // first-attempt 502 right after "live" is expected startup behavior, not
+      // an error, so each miss is logged at info level, not warn.
+      let lastResult = "no response";
+      for (
+        let urlAttempt = 1;
+        urlAttempt <= VERIFY_POSTLIVE_MAX_ATTEMPTS;
+        urlAttempt++
+      ) {
+        const reqStart = Date.now();
+        try {
+          const res = await fetch(url, {
+            method: "GET",
+            signal: AbortSignal.timeout(VERIFY_REQUEST_TIMEOUT_MS),
+          });
+          if (res.status === 200) {
+            return {
+              status: "succeeded",
+              // Read-only probe — nothing was created, nothing to roll back.
+              rollbackable: false,
+              details: {
+                url,
+                deployStatus: "live",
+                finishedAt: deploy.finishedAt ?? null,
+                latencyMs: Date.now() - reqStart,
+                attempts,
+                postLiveAttempts: urlAttempt,
+              },
+            };
+          }
+          lastResult = String(res.status);
+        } catch {
+          lastResult = "network error";
         }
-      } catch {
-        return {
-          status: "failed",
-          errorMessage:
-            "Render reports deploy live but service URL did not respond. Service may still be starting up.",
-        };
+        // Not 200 yet — expected during startup. Log at info, wait, retry.
+        await logSystem(
+          "info",
+          "genesis",
+          `verify_deployment post-live check attempt ${urlAttempt}/${VERIFY_POSTLIVE_MAX_ATTEMPTS} returned ${lastResult}`,
+          { projectId: ctx.projectId, serviceId, url },
+        );
+        if (urlAttempt < VERIFY_POSTLIVE_MAX_ATTEMPTS) {
+          await sleep(VERIFY_POLL_INTERVAL_MS);
+        }
       }
       return {
-        status: "succeeded",
-        // Read-only probe — nothing was created, nothing to roll back.
-        rollbackable: false,
-        details: {
-          url,
-          deployStatus: "live",
-          finishedAt: deploy.finishedAt ?? null,
-          latencyMs: Date.now() - reqStart,
-          attempts,
-        },
+        status: "failed",
+        errorMessage: `Render reports deploy live but service URL returned ${lastResult} after ${VERIFY_POSTLIVE_MAX_ATTEMPTS} retry attempts over 60 seconds. Service may still be starting up — check logs at ${logsUrl}`,
       };
     }
 
