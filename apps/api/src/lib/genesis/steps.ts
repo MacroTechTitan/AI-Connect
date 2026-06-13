@@ -9,7 +9,6 @@ import {
   createRepoFromTemplate,
   getPlatformClient,
   getServiceEnvVars,
-  putServiceEnvVars,
   renderGetLatestDeploy,
   supabaseBuildConnectionString,
   supabaseWaitUntilReady,
@@ -315,6 +314,25 @@ export async function createRenderService(
     };
   }
 
+  // Sprint 5.7: env vars are baked into the service at creation time (a
+  // post-create PUT to /env-vars doesn't trigger a redeploy, so the first deploy
+  // would run without them). create_supabase_project runs earlier in
+  // GENESIS_STEPS and populates ctx.databaseConnectionString — require it here.
+  const connectionString = ctx.databaseConnectionString;
+  if (!connectionString) {
+    return {
+      status: "failed",
+      errorMessage:
+        "No database connection string in context — create_supabase_project must succeed before the Render service is created with env vars.",
+    };
+  }
+  // DATABASE_URL carries the secret — never logged or recorded in event details.
+  const envVars: RenderEnvVar[] = [
+    { key: "DATABASE_URL", value: connectionString },
+    { key: "NODE_ENV", value: "production" },
+    { key: "PROJECT_NAME", value: ctx.name },
+  ];
+
   // Per-template Render config (TEMPLATE_REPOS is the single source of truth).
   // Legacy projects with no templateChoice pass undefined, and createResource
   // falls back to Sprint 4's pnpm/node-dist defaults.
@@ -330,6 +348,7 @@ export async function createRenderService(
     ownerId,
     buildCommand: renderConfig?.buildCommand,
     startCommand: renderConfig?.startCommand,
+    envVars,
   });
 
   if (result.status === "success") {
@@ -390,33 +409,26 @@ export async function wireGithubToRender(
   };
 }
 
-// --- step f: inject env vars onto the Render service ------------------------
+// --- step f: verify the Render service's env vars ---------------------------
 
-// Merge DATABASE_URL (from Vault, via ctx), NODE_ENV, and PROJECT_NAME into the
-// Render service's env vars. Render's env-vars endpoint is total-replace, so we
-// fetch the current set, overlay our three keys, and PUT the union back. The
-// step is rollbackable as platform "render" + step name inject_env_vars, which
-// the orchestrator routes to a fetch-filter-put removal of just our keys.
-const INJECTED_ENV_KEYS = ["DATABASE_URL", "NODE_ENV", "PROJECT_NAME"] as const;
-
+// Sprint 5.7: env vars are now baked into the service at create_render_service
+// time (see that step). This step no longer WRITES anything — it READS the
+// service's env vars back and confirms DATABASE_URL, NODE_ENV, and PROJECT_NAME
+// all landed with the expected values. That catches a Render API regression
+// where create succeeds but the env vars don't actually get set, before
+// verify_deployment burns minutes on a misconfigured service.
+//
+// Read-only, so rollbackable: false — there's nothing to undo, and the env vars
+// go away with the service when create_render_service is rolled back.
 export async function injectEnvVars(
   ctx: GenesisContext,
 ): Promise<GenesisStepResult> {
-  const connectionString = ctx.databaseConnectionString;
-  if (!connectionString) {
-    return {
-      status: "failed",
-      errorMessage:
-        "No database connection string in context — create_supabase_project must succeed before env injection.",
-    };
-  }
-
   const serviceId = ctx.results.create_render_service?.resourceId;
   if (!serviceId) {
     return {
       status: "failed",
       errorMessage:
-        "No Render service id in context — create_render_service must succeed before env injection.",
+        "No Render service id in context — create_render_service must succeed before env var verification.",
     };
   }
 
@@ -425,40 +437,52 @@ export async function injectEnvVars(
     return {
       status: "failed",
       errorMessage:
-        current.errorMessage ?? "Failed to read the Render service's env vars.",
+        current.errorMessage ??
+        "Failed to read the Render service's env vars for verification.",
     };
   }
 
-  // Our values (DATABASE_URL holds the secret — kept out of the event details).
-  const ourVars: RenderEnvVar[] = [
-    { key: "DATABASE_URL", value: connectionString },
-    { key: "NODE_ENV", value: "production" },
-    { key: "PROJECT_NAME", value: ctx.name },
-  ];
-  const ourKeys = new Set(ourVars.map((v) => v.key));
-  const merged = [
-    ...(current.envVars ?? []).filter((v) => !ourKeys.has(v.key)),
-    ...ourVars,
-  ];
+  const byKey = new Map(
+    (current.envVars ?? []).map((v) => [v.key, v.value] as const),
+  );
+  const missing: string[] = [];
+  const wrongValue: string[] = [];
 
-  const put = await putServiceEnvVars(ctx.credentials.render, serviceId, merged);
-  if (!put.success) {
+  // DATABASE_URL holds the secret — only check existence + length, never log or
+  // compare-print the value.
+  const dbUrl = byKey.get("DATABASE_URL");
+  if (dbUrl === undefined) {
+    missing.push("DATABASE_URL");
+  } else if (
+    !ctx.databaseConnectionString ||
+    dbUrl.length !== ctx.databaseConnectionString.length
+  ) {
+    wrongValue.push("DATABASE_URL");
+  }
+
+  const nodeEnv = byKey.get("NODE_ENV");
+  if (nodeEnv === undefined) missing.push("NODE_ENV");
+  else if (nodeEnv !== "production") wrongValue.push("NODE_ENV");
+
+  const projectName = byKey.get("PROJECT_NAME");
+  if (projectName === undefined) missing.push("PROJECT_NAME");
+  else if (projectName !== ctx.name) wrongValue.push("PROJECT_NAME");
+
+  if (missing.length > 0 || wrongValue.length > 0) {
     return {
       status: "failed",
-      errorMessage:
-        put.errorMessage ?? "Failed to update the Render service's env vars.",
+      errorMessage: `Render env var verification failed (missing: [${missing.join(", ")}], wrong value: [${wrongValue.join(", ")}]). Env vars are set at service-creation time (Sprint 5.7); a mismatch points at a Render API regression.`,
+      details: { missing, wrongValue, serviceId },
     };
   }
-
-  ctx.renderEnvVarKeys = [...INJECTED_ENV_KEYS];
 
   return {
     status: "succeeded",
-    platform: "render",
-    rollbackable: true,
-    resourceId: serviceId,
-    // keysSet only — never the DATABASE_URL value.
-    details: { keysSet: ctx.renderEnvVarKeys },
+    rollbackable: false,
+    details: {
+      verified: ["DATABASE_URL", "NODE_ENV", "PROJECT_NAME"],
+      serviceId,
+    },
   };
 }
 

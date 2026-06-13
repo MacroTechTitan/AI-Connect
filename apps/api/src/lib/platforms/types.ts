@@ -23,6 +23,11 @@ export interface PlatformCreateResourceRequest {
   // Per-template build/start commands (Sprint 5.5). Omitted → Sprint 4 defaults.
   buildCommand?: string;
   startCommand?: string;
+  // Env vars to bake into the service at creation time (Sprint 5.7). Render's
+  // POST /v1/services accepts these and starts the service with them already
+  // set; a post-create PUT to /env-vars does NOT trigger a redeploy, so the
+  // first deploy would otherwise run without them. Omitted → no env vars.
+  envVars?: Array<{ key: string; value: string }>;
 
   // Supabase
   region?: string;

@@ -126,6 +126,17 @@ async function createResource(
         repo: req.repo,
         branch: req.branch ?? "main",
         autoDeploy: "yes",
+        // Sprint 5.7: bake env vars in at creation so the first deploy starts
+        // with them set. Render accepts envVars at the top level of the create
+        // payload. Omitted entirely when the caller passes none.
+        ...(req.envVars && req.envVars.length > 0
+          ? {
+              envVars: req.envVars.map((v) => ({
+                key: v.key,
+                value: v.value,
+              })),
+            }
+          : {}),
         serviceDetails: {
           env: "node",
           region: "oregon",

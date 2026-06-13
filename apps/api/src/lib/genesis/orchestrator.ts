@@ -10,8 +10,6 @@ import { logSystem } from "../logging.js";
 import {
   getCloudflareClient,
   getPlatformClient,
-  getServiceEnvVars,
-  putServiceEnvVars,
   type Platform,
   type ValidatedIdentity,
 } from "../platforms/index.js";
@@ -214,52 +212,6 @@ function manualCleanupUrl(
   }
 }
 
-// Rollback for the inject_env_vars step: Render has no per-id env-var delete, so
-// we fetch the current set, drop the keys this run set (recorded in
-// details.keysSet), and PUT the remainder back. Best-effort by design — if it
-// fails, the create_render_service rollback that runs later in the reverse walk
-// deletes the whole service, taking the orphaned vars with it.
-async function rollbackRenderEnvVars(
-  ctx: GenesisContext,
-  result: GenesisStepResult,
-): Promise<{ deleted: boolean; errorMessage?: string }> {
-  const serviceId = result.resourceId;
-  if (!serviceId) {
-    return {
-      deleted: false,
-      errorMessage: "No Render service id to roll injected env vars back on.",
-    };
-  }
-  const rawKeys = result.details?.keysSet;
-  const keysSet = Array.isArray(rawKeys)
-    ? rawKeys.filter((k): k is string => typeof k === "string")
-    : [];
-  const current = await getServiceEnvVars(ctx.credentials.render, serviceId);
-  if (!current.success) {
-    return {
-      deleted: false,
-      errorMessage:
-        current.errorMessage ?? "Failed to read Render env vars for rollback.",
-    };
-  }
-  const remaining = (current.envVars ?? []).filter(
-    (v) => !keysSet.includes(v.key),
-  );
-  const put = await putServiceEnvVars(
-    ctx.credentials.render,
-    serviceId,
-    remaining,
-  );
-  if (!put.success) {
-    return {
-      deleted: false,
-      errorMessage:
-        put.errorMessage ?? "Failed to remove the injected env vars.",
-    };
-  }
-  return { deleted: true };
-}
-
 // Reverse-order, best-effort teardown of everything the run created before the
 // failed step. Walks GENESIS_STEPS backwards from just before the failed step,
 // deleting each rollbackable success via its platform client. Most-recent-first
@@ -311,8 +263,6 @@ async function rollback(
         deleteResult = await getCloudflareClient().deleteSubdomainCname(
           resourceId,
         );
-      } else if (platform === "render" && step.name === "inject_env_vars") {
-        deleteResult = await rollbackRenderEnvVars(ctx, result);
       } else {
         deleteResult = await getPlatformClient(platform).deleteResource(
           ctx.credentials[platform],
