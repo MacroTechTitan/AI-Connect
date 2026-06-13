@@ -256,6 +256,61 @@ See docs/future-ideas.md "Sprint 5 follow-ups" subsection for the full list. Hig
 ### Sprint 6 starting point
 Auth0 tenant scaffolding for each provisioned project (per the roadmap). When a user provisions a project, that project gets its own Auth0 tenant + application + user pool, with AUTH0_DOMAIN/AUTH0_CLIENT_ID/AUTH0_AUDIENCE injected into Render env vars (extending the Sprint 5 inject_env_vars step). Plus the Path B work (takeover existing Replit/Lovable/GitHub projects) from the Sprint 5 deferred list — still on the table for Sprint 6 vs 5.5 depending on user signal after Sprint 5 ships.
 
+## Sprint 5.5 — Genesis fixes (template-aware Render config + status-aware verify_deployment) (2026-06-10)
+- Branch: sprint/5.5-genesis-fixes
+- Merged via PR #10 on 2026-06-10
+- 2 commits: template-aware Render config (26705be), status-aware verify_deployment (290f3d3); plus a mid-sprint docs commit (d6fc39b) capturing the Command Center UI insight
+
+### What shipped
+- TEMPLATE_REPOS in types.ts extended with render.{buildCommand, startCommand} per template. The 3 templates needed different config: html-js → npm install / node server.js, sveltekit → npm install && npm run build / node build/index.js, nextjs → npm install && npm run build / npm start
+- renderClient.createResource extended to accept buildCommand and startCommand via the request, with Sprint 4 defaults as fallback
+- New renderGetLatestDeploy(credential, serviceId) helper — GET /v1/services/{id}/deploys?limit=1, returns deploy status
+- verifyDeployment rewritten to poll deploys API instead of URL — fast-fails on terminal states (build_failed, etc.) with Render's status and a dashboard logs URL
+
+### Why this was needed
+Sprint 5 smoke test failed at verify_deployment after 294 seconds. Root cause: Render service was being created with hardcoded Node config (pnpm install && pnpm build / node dist/index.js) that didn't match any of the 3 templates we shipped. verify_deployment polled a dead URL for 5 minutes before timing out — diagnostically blind to the underlying build failure.
+
+## Sprint 5.6 — Post-live URL retry hotfix (2026-06-12)
+- Direct-to-master commit (9ee53e7) — post-merge hotfix pattern from CLAUDE.md
+- 1 commit total
+
+### What shipped
+- VERIFY_POSTLIVE_MAX_ATTEMPTS = 6 in steps.ts
+- The post-live URL check (added in Sprint 5.5 Commit 2) now retries up to 6 times over 60 seconds before declaring failure
+- Each retry attempt logged at info level via logSystem
+- Bounded wall time: max 60 seconds of post-live retries on top of the 8-minute status polling deadline
+
+### Why this was needed
+Sprint 5.5 smoke test showed Render reports 'live' status reliably, but the public URL needs ~10-60 seconds more before actually serving 200. The single-shot post-live URL check failed too aggressively, surfacing 'Render reports deploy live but service URL returned 502' even though the deploy was genuinely working.
+
+## Sprint 5.7 — Disable Cloudflare DNS + env vars at creation (2026-06-13)
+- Branch: sprint/5.7-genesis-fixes
+- Merged via PR #11 on 2026-06-13
+- 3 commits: Disable Cloudflare DNS automation (546955b), AI-to-AI coordination docs capture (ace8a65), env vars during Render creation (c19fcb5)
+
+### What shipped
+- wireGithubToRender becomes a no-op again. Renders as "DNS automation deferred to Sprint 6+ (custom domain support, blocked on SSL cert depth for aiconnectprojects.macrotechtitan.com subdomain)"
+- New projects.deployed_url column (migration 0006). createRenderService writes deployed_url after service creation. Frontend project row displays this onrender.com URL as the clickable link
+- Cloudflare client code and env vars STAY in the repo. Subdomain column STAYS in the schema. Both preserved for re-enablement when a dedicated short domain is acquired
+- Render's POST /v1/services now receives envVars in the initial payload — [DATABASE_URL, NODE_ENV=production, PROJECT_NAME]. Service starts with env vars baked in
+- injectEnvVars step repurposed as VERIFICATION — fetches current env vars and confirms all 3 are set correctly
+- Rollback simplified: env vars die with the service, no separate env var rollback needed
+
+### Why this was needed
+Sprint 5.6 smoke test surfaced two bugs: (1) custom subdomain *.aiconnectprojects.macrotechtitan.com doesn't resolve in browsers because Cloudflare's universal SSL cert doesn't cover 3-level-deep subdomains; (2) PROJECT_NAME env var injection didn't reach the running service because Render starts the service immediately on creation and PUT env vars don't trigger redeploys.
+
+### Lessons learned across 5.5 / 5.6 / 5.7
+- Smoke testing is the discovery tool. Each sprint exposed the next layer of bugs. Sprint 5 -> empty repo timeout -> 5.5 fix -> URL race -> 5.6 fix -> env var timing + SSL depth -> 5.7 fix -> WORKING
+- The 'set env vars at create time, not after' pattern is the correct architecture. Sprint 5's PUT-after-create approach was always wrong in retrospect — services need their env vars from boot, and Render doesn't auto-redeploy on env var changes
+- Cloudflare DNS depth + SSL cert is a real constraint. The 'shared base domain' pattern (D1 from Sprint 5 planning) works architecturally but doesn't work practically without a dedicated domain. Sprint 6+ needs to either acquire aiconnect.app (or similar short domain) or accept the .onrender.com URLs
+- Status-aware verify > URL polling. The diagnostic improvement from 5.5 Commit 2 alone justifies its existence even ignoring the bug it fixed — future deploy failures now surface in seconds with real error messages
+
+### Genesis arc summary (Sprint 4 -> 5 -> 5.5 -> 5.6 -> 5.7)
+Sprint 4 (MVP) -> Sprint 5 (templates+DNS+envs, broken) -> Sprint 5.5 (template config+verify, half-fixed) -> Sprint 5.6 (post-live retry, surface SSL+env timing) -> Sprint 5.7 (disable DNS+create-time envs, WORKING). Smoke tested 2026-06-13 against AIC Sprint 5.7 Final project — provisioned a real working Express server with PROJECT_NAME injected correctly at https://aic-sprint-5-7-final.onrender.com.
+
+### Sprint 6 starting point
+Per the architecture sketch + product positioning conversation during this arc, Sprint 6 pivots from the original 'Auth0 tenant scaffolding per project' to an integration arc: Integration UI pattern + SendGrid + OpenAI per-project + Anthropic per-project + WordPress with a custom AI Connect plugin. Auth0 and Stripe deferred. Custom domains deferred. Path B (takeover existing projects) also deferred. Full Sprint 6 scope captured separately in upcoming planning doc.
+
 ---
 
-*Last updated: 2026-06-08*
+*Last updated: 2026-06-13*
