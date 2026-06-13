@@ -77,7 +77,14 @@ export const projects = pgTable(
     templateChoice: text("template_choice").notNull().default("html-js"),
     // Provisioned subdomain (e.g. 'aic-smoke-test'); the full URL is built at
     // runtime by appending CLOUDFLARE_BASE_DOMAIN. NULL until DNS is wired.
+    // Sprint 5.7: unused — DNS automation deferred until a dedicated short
+    // domain is acquired. Kept for forward compatibility; deployedUrl is the
+    // displayed URL now.
     subdomain: text("subdomain"),
+    // Sprint 5.7: the project's live URL (Render's onrender.com URL). Written at
+    // create_render_service time and shown in the frontend. NULL until the
+    // Render service is created.
+    deployedUrl: text("deployed_url"),
     // References a vault.secrets entry holding the project's Supabase Postgres
     // connection string. NULL until create_supabase_project captures it.
     databaseConnectionStringVaultId: uuid("database_connection_string_vault_id"),

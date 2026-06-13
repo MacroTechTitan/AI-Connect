@@ -51,6 +51,7 @@ interface ProjectRow {
   provisioningState: string;
   templateChoice: string;
   subdomain: string | null;
+  deployedUrl: string | null;
   organizationId: string;
   createdByUserId: string;
   createdAt: Date;
@@ -65,6 +66,7 @@ const projectProjection = {
   provisioningState: projects.provisioningState,
   templateChoice: projects.templateChoice,
   subdomain: projects.subdomain,
+  deployedUrl: projects.deployedUrl,
   organizationId: projects.organizationId,
   createdByUserId: projects.createdByUserId,
   createdAt: projects.createdAt,
@@ -85,6 +87,7 @@ function toResponse(p: ProjectRow) {
     provisioning_state: p.provisioningState,
     template_choice: p.templateChoice,
     subdomain: p.subdomain,
+    deployed_url: p.deployedUrl,
     organization_id: p.organizationId,
     created_by_user_id: p.createdByUserId,
     created_at: p.createdAt,

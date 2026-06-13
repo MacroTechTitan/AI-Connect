@@ -116,9 +116,13 @@ export interface GenesisContext {
   // Set at orchestrator start from project.template_choice. Undefined falls
   // back to Sprint 4's empty auto_init repo (legacy projects).
   templateChoice?: TemplateChoice;
-  // Set after wire_github_to_render provisions the Cloudflare CNAME.
+  // Set after wire_github_to_render provisions the Cloudflare CNAME. Unused as
+  // of Sprint 5.7 (DNS automation deferred); the step is now a no-op.
   subdomain?: string;
   subdomainCnameRecordId?: string;
+  // Sprint 5.7: the project's live onrender.com URL, set at
+  // create_render_service time and persisted to projects.deployed_url.
+  deployedUrl?: string;
   // The Supabase Postgres connection string. In-memory only for the duration of
   // the run — never logged, never persisted as plaintext (only the Vault id is).
   databaseConnectionString?: string;
