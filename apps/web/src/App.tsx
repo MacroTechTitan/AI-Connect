@@ -995,9 +995,6 @@ function GenesisProgress({
 
 type TemplateChoice = "html-js" | "sveltekit" | "nextjs";
 
-// Project subdomains live under this domain; the full URL is built at render.
-const PROJECTS_BASE_DOMAIN = "aiconnectprojects.macrotechtitan.com";
-
 const TEMPLATE_LABEL: Record<TemplateChoice, string> = {
   "html-js": "HTML + JavaScript",
   sveltekit: "SvelteKit",
@@ -1040,6 +1037,7 @@ interface ProjectRow {
   provisioning_state: ProvisioningState;
   template_choice: TemplateChoice;
   subdomain: string | null;
+  deployed_url: string | null;
   organization_id: string;
   created_by_user_id: string;
   created_at: string;
@@ -1322,18 +1320,18 @@ function ProjectsPanel({
                     <span className="project-template-badge">
                       Template: {templateLabelFor(p.template_choice)}
                     </span>
-                    {p.subdomain ? (
+                    {p.deployed_url ? (
                       <a
                         className={`project-subdomain-link${
                           p.provisioning_state === "provisioned"
                             ? ""
                             : " muted"
                         }`}
-                        href={`https://${p.subdomain}.${PROJECTS_BASE_DOMAIN}`}
+                        href={p.deployed_url}
                         target="_blank"
                         rel="noreferrer"
                       >
-                        URL: {p.subdomain}.{PROJECTS_BASE_DOMAIN}
+                        URL: {p.deployed_url}
                       </a>
                     ) : null}
                   </div>

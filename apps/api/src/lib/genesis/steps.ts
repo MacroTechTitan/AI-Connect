@@ -4,11 +4,9 @@ import { eq } from "drizzle-orm";
 
 import { getDb } from "../../db/client.js";
 import { projects } from "../../db/schema.js";
-import { env } from "../env.js";
 import { logSystem } from "../logging.js";
 import {
   createRepoFromTemplate,
-  getCloudflareClient,
   getPlatformClient,
   getServiceEnvVars,
   putServiceEnvVars,
@@ -335,6 +333,20 @@ export async function createRenderService(
   });
 
   if (result.status === "success") {
+    const serviceUrl = result.urls.service ?? "";
+
+    // Sprint 5.7: record the live URL on the project row immediately (the DNS
+    // step is now a no-op, so there's nothing later to wait for). Best-effort —
+    // a failed write here shouldn't fail provisioning, the URL is display-only.
+    if (serviceUrl) {
+      ctx.deployedUrl = serviceUrl;
+      await getDb()
+        .update(projects)
+        .set({ deployedUrl: serviceUrl })
+        .where(eq(projects.id, ctx.projectId))
+        .catch(() => {});
+    }
+
     return {
       status: "succeeded",
       resourceId: result.resourceId,
@@ -343,7 +355,7 @@ export async function createRenderService(
       details: {
         id: result.resourceId,
         // The deployed service URL — verify_deployment polls this.
-        url: result.urls.service ?? "",
+        url: serviceUrl,
         dashboard_url: result.urls.dashboard ?? "",
       },
     };
@@ -354,93 +366,27 @@ export async function createRenderService(
 
 // --- step e: provision the Cloudflare subdomain CNAME -----------------------
 
-// Render auto-wires the GitHub deploy webhook at service-creation time, so the
-// remaining "wiring" work is DNS: point {slug}.{CLOUDFLARE_BASE_DOMAIN} at the
-// Render onrender.com host via a CNAME. The Cloudflare record is rollbackable
-// (platform tag "cloudflare" routes the orchestrator to deleteSubdomainCname).
+// Sprint 5.7: no-op. Was real Cloudflare DNS in Sprint 5, but the constructed
+// subdomain *.aiconnectprojects.macrotechtitan.com doesn't resolve in browsers
+// — Cloudflare's universal SSL cert doesn't cover 3-level-deep subdomains. DNS
+// automation is deferred to Sprint 6+ when a dedicated short domain (e.g.
+// aiconnect.app) is acquired; re-enabling is a matter of restoring the
+// createSubdomainCname call below. The project's live URL is now Render's
+// onrender.com URL, captured at create_render_service time (see deployedUrl).
+//
+// The Cloudflare client (lib/platforms/cloudflare.ts) and the CLOUDFLARE_* env
+// vars stay in place, just unused. The step keeps its slot in GENESIS_STEPS so
+// the ordering and the events table shape stay consistent.
 export async function wireGithubToRender(
-  ctx: GenesisContext,
+  _ctx: GenesisContext,
 ): Promise<GenesisStepResult> {
-  const serviceUrl = detailString(ctx, "create_render_service", "url");
-  if (!serviceUrl) {
-    return {
-      status: "failed",
-      errorMessage:
-        "No Render service URL in context — create_render_service must succeed before DNS can be wired.",
-    };
-  }
-
-  let renderHostname: string;
-  try {
-    // CNAME content is the bare host, not the scheme-qualified URL.
-    renderHostname = new URL(serviceUrl).hostname;
-  } catch {
-    return {
-      status: "failed",
-      errorMessage: `Render service URL '${serviceUrl}' is not a valid URL — cannot derive the CNAME target.`,
-    };
-  }
-
-  const cloudflare = getCloudflareClient();
-  const result = await cloudflare.createSubdomainCname(ctx.slug, renderHostname);
-  if (!result.success) {
-    return {
-      status: "failed",
-      errorMessage: result.errorMessage ?? "Cloudflare CNAME creation failed.",
-    };
-  }
-
-  const baseDomain = env.CLOUDFLARE_BASE_DOMAIN ?? "";
-  const fullUrl = `https://${ctx.slug}.${baseDomain}`;
-  const recordId = result.recordId;
-
-  // Cloudflare succeeded but didn't return a record id — we can't track it for
-  // rollback. Succeed (the record exists) but mark it non-rollbackable and note
-  // it for manual cleanup.
-  if (!recordId) {
-    ctx.subdomain = ctx.slug;
-    await getDb()
-      .update(projects)
-      .set({ subdomain: ctx.slug })
-      .where(eq(projects.id, ctx.projectId))
-      .catch(() => {});
-    return {
-      status: "succeeded",
-      rollbackable: false,
-      details: {
-        subdomain: ctx.slug,
-        fullUrl,
-        note: "CNAME created but Cloudflare returned no record id; manual cleanup may be needed on rollback.",
-      },
-    };
-  }
-
-  // Persist the subdomain. If that write fails, undo the CNAME (this step's own
-  // resource isn't covered by the orchestrator's reverse-order rollback).
-  try {
-    await getDb()
-      .update(projects)
-      .set({ subdomain: ctx.slug })
-      .where(eq(projects.id, ctx.projectId));
-  } catch (err) {
-    await cloudflare.deleteSubdomainCname(recordId).catch(() => {});
-    return {
-      status: "failed",
-      errorMessage: `Provisioned DNS but failed to persist the subdomain: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    };
-  }
-
-  ctx.subdomain = ctx.slug;
-  ctx.subdomainCnameRecordId = recordId;
-
   return {
     status: "succeeded",
-    platform: "cloudflare",
-    rollbackable: true,
-    resourceId: recordId,
-    details: { subdomain: ctx.slug, fullUrl, recordId, renderHostname },
+    platform: undefined,
+    rollbackable: false,
+    details: {
+      note: "DNS automation deferred to Sprint 6+ (custom domain support, blocked on SSL cert depth for aiconnectprojects.macrotechtitan.com subdomain)",
+    },
   };
 }
 
