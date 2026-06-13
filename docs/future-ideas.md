@@ -225,6 +225,94 @@ Issues identified during Sprint 4 build worth tracking:
 - **General-purpose chat assistant.** Don't be ChatGPT-with-better-UI. Stay focused on AI-assisted development.
 - **Mobile app.** Solo devs and small teams work on laptops/desktops. Wasted effort until >1000 paying users explicitly ask for it.
 
+## AI-to-AI Coordination
+
+### AI-to-AI Coordination — the unix pipe for AI tools (target: Sprint 8-12)
+
+The founder's observation: "For coding/building and for using OpenClaw, there can be hundreds of copy-pastes until we get to the bottom of something." The human is currently the literal bottleneck transporting text between AIs that should be talking directly. Each manual copy-paste slows down, loses context (selective trimming), introduces errors, and wastes attention on routing instead of decisions.
+
+AI Connect could be the orchestration layer that eliminates this.
+
+### Three real use cases (all observed in active workflows)
+
+**Use Case A: Long sprint with limited human involvement.** Like the Sprint 4/5/5.5/5.6/5.7 arc of building AI Connect itself. Claude.ai produces plans, Claude Code executes commits, the human reviews. Today: the human copies each plan from Claude.ai and pastes to Claude Code, then copies the result back to Claude.ai for review. Future: Claude.ai writes prompts directly into Claude Code's queue; Claude Code's results route directly back to Claude.ai. Human reviews at decision points only, not every transit.
+
+**Use Case B: OpenClaw setup (operating-other-app workflows).** The founder is concurrently configuring OpenClaw (or similar tool) for another project. Hundreds of small instructions back and forth between AI and tool until the configuration is right. Each iteration is mostly mechanical. Future: AI Connect routes the AI's instructions to OpenClaw's API/MCP/whatever, gets results back, decides if another iteration is needed — without human transit.
+
+**Use Case C: Multi-AI debugging.** A bug appears in Project Genesis. Render logs, Supabase state, Cloudflare DNS records, the orchestrator's events — diagnosing requires looking at all of them. Today: human aggregates context from each service, prompts AI to think, repeats. Future: AI Connect orchestrates the lookup itself — Render MCP for logs, Supabase MCP for state, Cloudflare API for DNS — passes the aggregated context to Claude.ai, gets a diagnosis, posts to a human-readable summary tab.
+
+### The transport pattern (architecture sketch)
+
+Deliberately simple to start. The mechanism is interchangeable:
+
+- **HTTP endpoint** (Express, PHP, whatever) where one AI posts and another polls
+- **MCP server hosted by AI Connect** that all AIs connect to as both publisher and subscriber
+- **Shared filesystem / Supabase row** that AIs read and write
+- **Webhook callbacks** for event-triggered handoffs
+
+The user shouldn't care which transport — AI Connect picks per use case.
+
+### Configurable event-triggered prompting
+
+Not every event triggers AI coordination. The user configures which events trigger which AI:
+
+- "When Project Genesis verify_deployment fails, post the Render logs to Claude.ai and ask for diagnosis"
+- "When Claude Code finishes a commit, ask Cursor to write a 1-line PR summary"
+- "When OpenClaw configuration encounters an unknown error, ask Claude.ai for a recovery path"
+- "When the human asks 'is X done', summarize across all active AI conversations and respond"
+
+Each event hook: event → which AI → prompt template → escalation rule → cost budget.
+
+### Warning signals
+
+Hundreds of copy-pastes today = thousands of automated AI-to-AI exchanges in the future. Critical that AI Connect surfaces problems:
+
+- **Loop detection** — two AIs going back and forth without converging. Escalate to human.
+- **Budget warnings** — token cost exceeds threshold. Pause, escalate.
+- **Contradiction detection** — AIs reaching incompatible conclusions. Escalate.
+- **High-risk action proposed** — AI proposes deleting data, making payments, sending emails. Escalate.
+- **Convergence detection** — AIs have reached consensus, here's the result. Human reviews and approves.
+
+The default is: humans get involved only at decision points and escalations. Everything else runs.
+
+### Why this is genuinely novel positioning
+
+Existing tools either:
+- Sit a single AI inside a single environment (Cursor, Claude Code, Replit, OpenClaw)
+- Use one AI to call another via API as a tool (Anthropic's tool use, OpenAI's function calling)
+- Hardcode AI orchestration patterns (LangChain, CrewAI, Autogen)
+
+None of them are "**a unix pipe for AI tools**" — orthogonal to any specific AI, user-configurable, event-triggered, observable, debuggable. That's what AI Connect could be uniquely positioned to provide.
+
+### Sprint sequencing
+
+Earliest reasonable: Sprint 8-10 (after tool routing infrastructure). Would build on:
+
+- MCP server for AI Connect (Sprint 6-7 candidate)
+- Tool routing layer (Sprint 8 if adopted)
+- Composable skills (Sprint 10-15)
+
+A minimal proof-of-concept could ship earlier — just direct handoff between Claude.ai and Claude Code via a shared transport, no fancy routing. Maybe 1-2 sprints. Worth thinking about: this might be the SHORTEST path to a real moat.
+
+### Open architectural questions
+
+- Synchronous or async? Probably async — AIs are slow, blocking is bad UX
+- How long do AI conversations persist? Per-task? Per-project? Across-projects?
+- How is context shared between AIs (full history vs summary vs state pointer)?
+- Cost model — AI-to-AI is still token-priced; budget controls are essential
+- Trust model — does AI A get to make commits if AI B proposes them? Or only with human approval?
+- Discovery — how does AI A know AI B exists and what it's good at?
+
+### Concrete next step (when to revisit)
+
+After Sprint 5.7 ships and the smoke test confirms Project Genesis works at the .onrender.com URL, revisit this. Three possibilities:
+
+A. Sprint 8 builds tool routing first, then AI-to-AI coordination Sprint 9.
+B. Sprint 8 builds AI-to-AI coordination FIRST (the shortest path to a real moat), tool routing follows.
+C. Build a minimal POC during Sprint 6 (Auth0 sprint) on the side, see if it changes the founder's daily workflow.
+
+C is interesting because the founder is currently feeling the pain directly. Even a crude version that eliminates 50% of copy-pastes would be useful immediately.
+
 ---
 
-*Last updated: 2026-06-08*
+*Last updated: 2026-06-13*
