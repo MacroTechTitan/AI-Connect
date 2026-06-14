@@ -430,6 +430,61 @@ export const platformCredentials = pgTable(
   }),
 );
 
+export const integrations = pgTable(
+  "integrations",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id").references(
+      () => organizations.id,
+      { onDelete: "set null" },
+    ),
+    integrationType: text("integration_type").notNull(),
+    // For sendgrid/wordpress: a vault.secrets.id UUID. For openai/anthropic:
+    // null (provider_key_id in config jsonb references provider_keys instead).
+    vaultSecretId: uuid("vault_secret_id"),
+    // Integration-specific config. Shapes per type:
+    // - sendgrid: {} (just the credential)
+    // - openai/anthropic: { provider_key_id: uuid } (links to provider_keys)
+    // - wordpress: { site_url: text, modules: [{slug,title,source_url,required_memberpress_tier}] }
+    config: jsonb("config").notNull().default(sql`'{}'::jsonb`),
+    includeInProjects: boolean("include_in_projects").notNull().default(true),
+    status: text("status").notNull().default("pending"),
+    lastValidatedAt: timestamp("last_validated_at", { withTimezone: true }),
+    validationError: text("validation_error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    integrationTypeCheck: check(
+      "integrations_integration_type_check",
+      sql`${table.integrationType} IN ('sendgrid', 'openai', 'anthropic', 'wordpress')`,
+    ),
+    statusCheck: check(
+      "integrations_status_check",
+      sql`${table.status} IN ('pending', 'validated', 'failed')`,
+    ),
+    userIdIdx: index("idx_integrations_user_id").on(table.userId),
+    userTypeIdx: index("idx_integrations_user_type").on(
+      table.userId,
+      table.integrationType,
+    ),
+    organizationIdIdx: index("idx_integrations_organization_id")
+      .on(table.organizationId)
+      .where(sql`${table.organizationId} IS NOT NULL`),
+    userTypeUnique: unique("integrations_user_type_unique").on(
+      table.userId,
+      table.integrationType,
+    ),
+  }),
+);
+
 export const projectProvisioningEvents = pgTable(
   "project_provisioning_events",
   {
