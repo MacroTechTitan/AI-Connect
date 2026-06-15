@@ -3,14 +3,15 @@ import type {
   IntegrationValidator,
   IntegrationValidationResult,
 } from "./types.js";
+import { sendgridValidator } from "./validators/sendgrid.js";
 
-// Stub validator for Commit 3. Per-type validators land in Commits 4-7.
+// Stub validator for integration types whose real validators haven't shipped yet.
 const stubValidator: IntegrationValidator = async () => ({
   valid: true,
 });
 
 const VALIDATORS: Record<IntegrationType, IntegrationValidator> = {
-  sendgrid: stubValidator,
+  sendgrid: sendgridValidator,
   openai: stubValidator,
   anthropic: stubValidator,
   wordpress: stubValidator,
