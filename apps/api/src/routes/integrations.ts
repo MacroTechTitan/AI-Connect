@@ -164,7 +164,7 @@ async function handleAddIntegration(
   // Validate BEFORE storing — matches platform_credentials' fail-fast pattern.
   // Commit 3 ships a stub validator (always valid: true); real per-type
   // validators replace it in later commits.
-  const validation = await getIntegrationValidator(integrationType)({
+  const validation = await getIntegrationValidator(integrationType, userId)({
     integrationType,
     credential,
     config,
