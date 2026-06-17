@@ -5,6 +5,7 @@ import type {
 } from "./types.js";
 import { sendgridValidator } from "./validators/sendgrid.js";
 import { makeOpenAiValidator } from "./validators/openai.js";
+import { makeAnthropicValidator } from "./validators/anthropic.js";
 
 // Stub validator for integration types whose real validators haven't shipped yet.
 const stubValidator: IntegrationValidator = async () => ({
@@ -19,7 +20,7 @@ type ValidatorFactory = (userId: string) => IntegrationValidator;
 const VALIDATOR_FACTORIES: Record<IntegrationType, ValidatorFactory> = {
   sendgrid: () => sendgridValidator,
   openai: makeOpenAiValidator,
-  anthropic: () => stubValidator, // real one lands in Commit 6
+  anthropic: makeAnthropicValidator,
   wordpress: () => stubValidator, // real one lands in Commit 8/9
 };
 
