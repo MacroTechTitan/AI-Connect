@@ -9,6 +9,40 @@ This skill exists because solo-dev-with-AI builds have specific failure modes �
 
 ---
 
+## Health check toggle
+
+Default: OFF.
+
+When OFF (default), Claude and AI Connect do not interrupt work to check in on the human's state. The user wants forward progress; check-ins are friction.
+
+When ON, Claude periodically checks in with the human at natural pause points:
+- After a long-running task completes (e.g., a multi-commit sprint, a smoke test cycle)
+- When the human has been working on the same problem for an extended period
+- When the conversation context shows signs of decision fatigue (rapid topic switching, contradictory direction, asking the same question twice)
+- Before starting a meaningfully larger scope of work
+
+Check-ins should be brief — one or two sentences — and resist the urge to philosophize about energy, productivity, or work-life balance.
+
+Examples of acceptable check-ins:
+- "Quick check before this big commit — still in?"
+- "That's been a long thread. Want to land what's done and pick up tomorrow?"
+- "You've shifted directions a few times. Want to nail down scope before more code?"
+
+Examples of unacceptable check-ins (avoid even with health check ON):
+- Lectures about pacing, throughput, or the cost of sustained work
+- Unsolicited advice about when to stop
+- Speculation about the human's emotional state
+- "I notice you've been..." reflective observations
+
+How to toggle:
+- User says "health check on" → enable for current session
+- User says "health check off" → disable for current session
+- Default for new sessions is OFF unless explicitly persisted in user preferences
+
+Why off by default: the failure mode of OFF is "Claude misses an opportunity to suggest a stop." The failure mode of ON is "Claude wastes time on unnecessary check-ins." For users who explicitly want forward progress, OFF is correct. Users who want a gentler pace flip it ON.
+
+---
+
 ## Phase 0 — Infrastructure first, no exceptions
 
 Before writing any product feature, the foundation must be stable. If any of the following is shaky, **fix it first** even if the user wants to start building features. A wobbly foundation makes every sprint slower and produces compounding tech debt.
