@@ -6,14 +6,10 @@ import type {
 import { sendgridValidator } from "./validators/sendgrid.js";
 import { makeOpenAiValidator } from "./validators/openai.js";
 import { makeAnthropicValidator } from "./validators/anthropic.js";
-
-// Stub validator for integration types whose real validators haven't shipped yet.
-const stubValidator: IntegrationValidator = async () => ({
-  valid: true,
-});
+import { wordpressValidator } from "./validators/wordpress.js";
 
 // Factory pattern: each entry takes a userId and returns a validator.
-// Types that don't need userId (sendgrid, stubs) ignore it; types that do
+// Types that don't need userId (sendgrid, wordpress) ignore it; types that do
 // (openai, anthropic) close over it for ownership checks.
 type ValidatorFactory = (userId: string) => IntegrationValidator;
 
@@ -21,7 +17,7 @@ const VALIDATOR_FACTORIES: Record<IntegrationType, ValidatorFactory> = {
   sendgrid: () => sendgridValidator,
   openai: makeOpenAiValidator,
   anthropic: makeAnthropicValidator,
-  wordpress: () => stubValidator, // real one lands in Commit 8/9
+  wordpress: () => wordpressValidator,
 };
 
 export function getIntegrationValidator(

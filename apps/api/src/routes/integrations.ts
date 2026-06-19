@@ -8,7 +8,13 @@ import {
   isIntegrationType,
   type IntegrationConfig,
   type IntegrationType,
+  type WordPressConfig,
 } from "../lib/integrations/types.js";
+import {
+  WordPressClientError,
+  wordpressClient,
+  type WordPressModule,
+} from "../lib/integrations/wordpressClient.js";
 import { logUserAction } from "../lib/logging.js";
 import {
   assertOrgAccess,
@@ -372,6 +378,268 @@ async function handleDeleteIntegration(
   res.status(200).json({ id: removed.id, deleted: true });
 }
 
+// ── WordPress module management ─────────────────────────────────────────────
+// These routes proxy to the user's installed AI Connect plugin. They load the
+// wordpress integration row (org- + user-scoped), read its plugin token from
+// Vault, and call the plugin's REST API. The integration must be type=wordpress
+// and validated.
+
+interface WordPressTarget {
+  integrationId: string;
+  siteUrl: string;
+  token: string;
+}
+
+// Resolves the wordpress integration for req.params.id and returns the data
+// needed to call its plugin. Writes the error response and returns null on any
+// failure (not found / wrong type / not validated / missing secret).
+async function resolveWordPressTarget(
+  req: Request,
+  res: Response,
+): Promise<WordPressTarget | null> {
+  const ctx = getCtx(req);
+  const integrationId = req.params.id;
+  if (typeof integrationId !== "string" || !UUID_RE.test(integrationId)) {
+    res.status(404).json({ error: "integration_not_found" });
+    return null;
+  }
+
+  const [row] = await getDb()
+    .select({
+      id: integrations.id,
+      integrationType: integrations.integrationType,
+      config: integrations.config,
+      status: integrations.status,
+      vaultSecretId: integrations.vaultSecretId,
+    })
+    .from(integrations)
+    .where(
+      and(
+        orgScopeFilter(integrations, ctx),
+        eq(integrations.id, integrationId),
+        eq(integrations.userId, ctx.userId),
+      ),
+    )
+    .limit(1);
+
+  if (!row) {
+    res.status(404).json({ error: "integration_not_found" });
+    return null;
+  }
+  if (row.integrationType !== "wordpress") {
+    res.status(400).json({ error: "not_a_wordpress_integration" });
+    return null;
+  }
+  if (row.status !== "validated") {
+    res.status(409).json({ error: "integration_not_validated" });
+    return null;
+  }
+  if (!row.vaultSecretId) {
+    res.status(500).json({ error: "integration_missing_credential" });
+    return null;
+  }
+
+  const cfg = row.config as WordPressConfig;
+  if (typeof cfg.site_url !== "string") {
+    res.status(500).json({ error: "integration_missing_site_url" });
+    return null;
+  }
+
+  const token = await vault.getSecret(row.vaultSecretId);
+  return { integrationId: row.id, siteUrl: cfg.site_url, token };
+}
+
+// Parses + validates a module payload from the request body. Returns null and
+// writes a 400 on bad input. The plugin re-validates, but failing fast here
+// gives a cleaner error and avoids a wasted round trip.
+function parseModuleBody(
+  req: Request,
+  res: Response,
+  slugOverride?: string,
+): WordPressModule | null {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+
+  const slug = slugOverride ?? body.slug;
+  if (typeof slug !== "string" || !/^[a-z0-9-]+$/.test(slug)) {
+    res.status(400).json({ error: "invalid_slug" });
+    return null;
+  }
+  const title = body.title;
+  if (typeof title !== "string" || title.trim().length === 0) {
+    res.status(400).json({ error: "invalid_title" });
+    return null;
+  }
+  const sourceUrl = body.source_url;
+  if (
+    typeof sourceUrl !== "string" ||
+    !/^https?:\/\//i.test(sourceUrl) ||
+    sourceUrl.length > MAX_URL_CHARS
+  ) {
+    res.status(400).json({ error: "invalid_source_url" });
+    return null;
+  }
+  const tierRaw = body.required_memberpress_tier;
+  let tier: string | null;
+  if (tierRaw === null || tierRaw === undefined || tierRaw === "") {
+    tier = null;
+  } else if (typeof tierRaw === "string") {
+    tier = tierRaw;
+  } else {
+    res.status(400).json({ error: "invalid_required_memberpress_tier" });
+    return null;
+  }
+
+  return {
+    slug,
+    title: title.trim(),
+    source_url: sourceUrl,
+    required_memberpress_tier: tier,
+  };
+}
+
+// Translates a thrown WordPressClientError into a response; rethrows anything
+// else so the global handler turns it into a 500.
+function handleWordPressError(err: unknown, res: Response): void {
+  if (err instanceof WordPressClientError) {
+    res.status(err.status).json({ error: "wordpress_error", reason: err.message });
+    return;
+  }
+  throw err;
+}
+
+// After any module mutation, refresh the cached module list on the integration
+// row's config so the DB reflects the plugin's truth (best-effort).
+async function syncModulesToConfig(
+  target: WordPressTarget,
+  modules: WordPressModule[],
+): Promise<void> {
+  await getDb()
+    .update(integrations)
+    .set({
+      config: { site_url: target.siteUrl, modules },
+      updatedAt: new Date(),
+    })
+    .where(eq(integrations.id, target.integrationId));
+}
+
+async function handleWordPressStatus(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const target = await resolveWordPressTarget(req, res);
+  if (!target) return;
+  try {
+    const status = await wordpressClient.getStatus(
+      target.siteUrl,
+      target.token,
+    );
+    res.status(200).json(status);
+  } catch (err) {
+    handleWordPressError(err, res);
+  }
+}
+
+async function handleListModules(req: Request, res: Response): Promise<void> {
+  const target = await resolveWordPressTarget(req, res);
+  if (!target) return;
+  try {
+    const modules = await wordpressClient.listModules(
+      target.siteUrl,
+      target.token,
+    );
+    res.status(200).json({ modules });
+  } catch (err) {
+    handleWordPressError(err, res);
+  }
+}
+
+async function handleAddModule(req: Request, res: Response): Promise<void> {
+  const target = await resolveWordPressTarget(req, res);
+  if (!target) return;
+  const module = parseModuleBody(req, res);
+  if (!module) return;
+  try {
+    const created = await wordpressClient.addModule(
+      target.siteUrl,
+      target.token,
+      module,
+    );
+    const modules = await wordpressClient.listModules(
+      target.siteUrl,
+      target.token,
+    );
+    await syncModulesToConfig(target, modules);
+    await logUserAction(
+      getCtx(req).userId,
+      "add_wordpress_module",
+      "integration",
+      target.integrationId,
+      getCtx(req).organizationId,
+      { slug: module.slug },
+    );
+    res.status(201).json({ module: created, modules });
+  } catch (err) {
+    handleWordPressError(err, res);
+  }
+}
+
+async function handleUpdateModule(req: Request, res: Response): Promise<void> {
+  const target = await resolveWordPressTarget(req, res);
+  if (!target) return;
+  const slug = req.params.slug;
+  if (typeof slug !== "string" || !/^[a-z0-9-]+$/.test(slug)) {
+    res.status(404).json({ error: "module_not_found" });
+    return;
+  }
+  const module = parseModuleBody(req, res, slug);
+  if (!module) return;
+  try {
+    const updated = await wordpressClient.updateModule(
+      target.siteUrl,
+      target.token,
+      slug,
+      module,
+    );
+    const modules = await wordpressClient.listModules(
+      target.siteUrl,
+      target.token,
+    );
+    await syncModulesToConfig(target, modules);
+    res.status(200).json({ module: updated, modules });
+  } catch (err) {
+    handleWordPressError(err, res);
+  }
+}
+
+async function handleDeleteModule(req: Request, res: Response): Promise<void> {
+  const target = await resolveWordPressTarget(req, res);
+  if (!target) return;
+  const slug = req.params.slug;
+  if (typeof slug !== "string" || !/^[a-z0-9-]+$/.test(slug)) {
+    res.status(404).json({ error: "module_not_found" });
+    return;
+  }
+  try {
+    await wordpressClient.deleteModule(target.siteUrl, target.token, slug);
+    const modules = await wordpressClient.listModules(
+      target.siteUrl,
+      target.token,
+    );
+    await syncModulesToConfig(target, modules);
+    await logUserAction(
+      getCtx(req).userId,
+      "remove_wordpress_module",
+      "integration",
+      target.integrationId,
+      getCtx(req).organizationId,
+      { slug },
+    );
+    res.status(200).json({ slug, deleted: true, modules });
+  } catch (err) {
+    handleWordPressError(err, res);
+  }
+}
+
 export function registerIntegrationsRoutes(app: Express): void {
   app.post(
     "/api/integrations",
@@ -396,5 +664,37 @@ export function registerIntegrationsRoutes(app: Express): void {
     requireAuth,
     requireHydratedUser,
     handleDeleteIntegration,
+  );
+
+  // WordPress module management — proxies to the user's installed plugin.
+  app.get(
+    "/api/integrations/:id/status",
+    requireAuth,
+    requireHydratedUser,
+    handleWordPressStatus,
+  );
+  app.get(
+    "/api/integrations/:id/modules",
+    requireAuth,
+    requireHydratedUser,
+    handleListModules,
+  );
+  app.post(
+    "/api/integrations/:id/modules",
+    requireAuth,
+    requireHydratedUser,
+    handleAddModule,
+  );
+  app.patch(
+    "/api/integrations/:id/modules/:slug",
+    requireAuth,
+    requireHydratedUser,
+    handleUpdateModule,
+  );
+  app.delete(
+    "/api/integrations/:id/modules/:slug",
+    requireAuth,
+    requireHydratedUser,
+    handleDeleteModule,
   );
 }

@@ -8,12 +8,20 @@ import {
   type FormEvent,
 } from "react";
 
+import { SessionExpiredNotice } from "./components/SessionExpiredNotice";
+import { WordPressModuleManager } from "./components/WordPressModuleManager";
+import { WordPressWizard } from "./components/WordPressWizard";
+import {
+  authedFetch,
+  isSessionExpired,
+  type GetAccessToken,
+} from "./lib/api";
+
 type HealthStatus = "pending" | "ok" | "down";
 type Provider = "anthropic" | "openai" | "ollama";
 type Platform = "vercel" | "render" | "github" | "supabase";
 
 const HEALTH_URL = "https://api.aiconnect.macrotechtitan.com/health";
-const API_BASE = import.meta.env.VITE_API_BASE_URL;
 const CHANGELOG_URL =
   "https://github.com/MacroTechTitan/AI-Connect/blob/master/CHANGELOG.md";
 
@@ -51,52 +59,6 @@ const PLATFORM_TOKEN_PLACEHOLDER: Record<Platform, string> = {
   supabase:
     "Personal access token from supabase.com/dashboard/account/tokens",
 };
-
-type GetAccessToken = (opts?: { cacheMode?: "off" }) => Promise<string>;
-
-// Sentinel error message thrown by authedFetch when the Auth0 SDK fails to
-// produce an access token — typically because the refresh token is missing,
-// the user needs to re-auth, or consent expired. Components catch this and
-// render <SessionExpiredNotice /> instead of the misleading "couldn't reach
-// the server" copy.
-const SESSION_EXPIRED = "session_expired";
-
-function isSessionExpired(err: unknown): boolean {
-  return err instanceof Error && err.message === SESSION_EXPIRED;
-}
-
-// Single retry on 401: forces a token refresh in case the cached access token
-// has expired or its audience/scope drifted. If the SDK itself throws on the
-// token call (Missing Refresh Token / Login Required / Consent Required),
-// surface a structured session_expired error so the UI can show recovery.
-async function authedFetch(
-  path: string,
-  init: RequestInit,
-  getAccessTokenSilently: GetAccessToken,
-): Promise<Response> {
-  const send = async (forceRefresh: boolean): Promise<Response> => {
-    let token: string;
-    try {
-      token = await getAccessTokenSilently(
-        forceRefresh ? { cacheMode: "off" } : undefined,
-      );
-    } catch (err) {
-      const wrapped = new Error(SESSION_EXPIRED);
-      (wrapped as Error & { cause?: unknown }).cause = err;
-      throw wrapped;
-    }
-    return fetch(`${API_BASE}${path}`, {
-      ...init,
-      headers: {
-        ...(init.headers ?? {}),
-        Authorization: `Bearer ${token}`,
-      },
-    });
-  };
-  const res = await send(false);
-  if (res.status === 401) return send(true);
-  return res;
-}
 
 // The native EventSource API can't send an Authorization header, so we can't
 // use it without leaking the JWT into the URL (and server access logs). Instead
@@ -154,25 +116,6 @@ async function streamSse(
   } finally {
     reader.cancel().catch(() => {});
   }
-}
-
-// Inline recovery UI rendered by any component that catches a
-// session_expired error. The button triggers loginWithRedirect — one click
-// and the user is back through the Auth0 flow.
-function SessionExpiredNotice() {
-  const { loginWithRedirect } = useAuth0();
-  return (
-    <div className="session-expired">
-      <span>Your session expired.</span>
-      <button
-        type="button"
-        className="btn-primary"
-        onClick={() => void loginWithRedirect()}
-      >
-        Sign in again
-      </button>
-    </div>
-  );
 }
 
 function formatCost(cost: number | null | undefined): string {
@@ -775,10 +718,17 @@ function IntegrationsPanel({
   const [addType, setAddType] = useState<IntegrationType>("sendgrid");
   const [addSendgridKey, setAddSendgridKey] = useState("");
   const [addProviderKeyId, setAddProviderKeyId] = useState("");
-  const [addWpSiteUrl, setAddWpSiteUrl] = useState("");
-  const [addWpToken, setAddWpToken] = useState("");
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+
+  // WordPress uses a guided wizard for first connection and a separate module
+  // manager afterward, rather than the inline credential form the other types
+  // use.
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [moduleManager, setModuleManager] = useState<{
+    integrationId: string;
+    siteUrl: string;
+  } | null>(null);
 
   const refresh = useCallback(async () => {
     setListError(null);
@@ -847,16 +797,13 @@ function IntegrationsPanel({
   const needsProviderKey = addType === "openai" || addType === "anthropic";
   const noMatchingKey = needsProviderKey && matchingKeys.length === 0;
 
+  // WordPress is excluded — it connects through the wizard, not this form.
   let canSubmit = false;
   if (addType === "sendgrid") canSubmit = addSendgridKey.length > 0;
   else if (needsProviderKey) canSubmit = addProviderKeyId.length > 0;
-  else if (addType === "wordpress")
-    canSubmit = /^https?:\/\//i.test(addWpSiteUrl) && addWpToken.length > 0;
 
   function resetForm() {
     setAddSendgridKey("");
-    setAddWpSiteUrl("");
-    setAddWpToken("");
     // addProviderKeyId is managed by the matchingKeys effect.
   }
 
@@ -872,16 +819,11 @@ function IntegrationsPanel({
           credential: addSendgridKey,
           config: {},
         };
-      } else if (needsProviderKey) {
+      } else {
+        // needsProviderKey (openai/anthropic) — wordpress never reaches here.
         payload = {
           integration_type: addType,
           config: { provider_key_id: addProviderKeyId },
-        };
-      } else {
-        payload = {
-          integration_type: "wordpress",
-          credential: addWpToken,
-          config: { site_url: addWpSiteUrl },
         };
       }
 
@@ -1089,6 +1031,21 @@ function IntegrationsPanel({
                     />
                     <span>Include in new projects</span>
                   </label>
+                  {c.integration_type === "wordpress" &&
+                  typeof c.config.site_url === "string" ? (
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() =>
+                        setModuleManager({
+                          integrationId: c.id,
+                          siteUrl: c.config.site_url as string,
+                        })
+                      }
+                    >
+                      Manage Modules
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="btn-danger"
@@ -1156,36 +1113,50 @@ function IntegrationsPanel({
 
         {addType === "wordpress" ? (
           <>
-            <input
-              className="label-input"
-              type="text"
-              placeholder="https://your-site.com"
-              value={addWpSiteUrl}
-              onChange={(e) => setAddWpSiteUrl(e.target.value)}
-              maxLength={2000}
-              required
-            />
-            <input
-              className="credential-input"
-              type="password"
-              placeholder="Plugin token"
-              value={addWpToken}
-              onChange={(e) => setAddWpToken(e.target.value)}
-              maxLength={1000}
-              required
-            />
+            <p className="muted">
+              Connecting WordPress installs a plugin on your site. The wizard
+              walks you through it — about 2 minutes.
+            </p>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => setWizardOpen(true)}
+            >
+              Connect WordPress Site
+            </button>
           </>
-        ) : null}
-
-        <button
-          type="submit"
-          className="btn-primary"
-          disabled={adding || !canSubmit}
-        >
-          {adding ? "Adding…" : "Add integration"}
-        </button>
+        ) : (
+          <button
+            type="submit"
+            className="btn-primary"
+            disabled={adding || !canSubmit}
+          >
+            {adding ? "Adding…" : "Add integration"}
+          </button>
+        )}
         {addError ? <p className="error">{addError}</p> : null}
       </form>
+
+      {wizardOpen ? (
+        <WordPressWizard
+          getAccessTokenSilently={getAccessTokenSilently}
+          onClose={() => setWizardOpen(false)}
+          onConnected={() => void refresh()}
+          onManageModules={(integrationId, siteUrl) => {
+            setWizardOpen(false);
+            setModuleManager({ integrationId, siteUrl });
+          }}
+        />
+      ) : null}
+
+      {moduleManager ? (
+        <WordPressModuleManager
+          getAccessTokenSilently={getAccessTokenSilently}
+          integrationId={moduleManager.integrationId}
+          siteUrl={moduleManager.siteUrl}
+          onClose={() => setModuleManager(null)}
+        />
+      ) : null}
     </div>
   );
 }
