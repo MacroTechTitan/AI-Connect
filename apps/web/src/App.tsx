@@ -8,12 +8,20 @@ import {
   type FormEvent,
 } from "react";
 
+import { SessionExpiredNotice } from "./components/SessionExpiredNotice";
+import { WordPressModuleManager } from "./components/WordPressModuleManager";
+import { WordPressWizard } from "./components/WordPressWizard";
+import {
+  authedFetch,
+  isSessionExpired,
+  type GetAccessToken,
+} from "./lib/api";
+
 type HealthStatus = "pending" | "ok" | "down";
 type Provider = "anthropic" | "openai" | "ollama";
 type Platform = "vercel" | "render" | "github" | "supabase";
 
 const HEALTH_URL = "https://api.aiconnect.macrotechtitan.com/health";
-const API_BASE = import.meta.env.VITE_API_BASE_URL;
 const CHANGELOG_URL =
   "https://github.com/MacroTechTitan/AI-Connect/blob/master/CHANGELOG.md";
 
@@ -51,52 +59,6 @@ const PLATFORM_TOKEN_PLACEHOLDER: Record<Platform, string> = {
   supabase:
     "Personal access token from supabase.com/dashboard/account/tokens",
 };
-
-type GetAccessToken = (opts?: { cacheMode?: "off" }) => Promise<string>;
-
-// Sentinel error message thrown by authedFetch when the Auth0 SDK fails to
-// produce an access token — typically because the refresh token is missing,
-// the user needs to re-auth, or consent expired. Components catch this and
-// render <SessionExpiredNotice /> instead of the misleading "couldn't reach
-// the server" copy.
-const SESSION_EXPIRED = "session_expired";
-
-function isSessionExpired(err: unknown): boolean {
-  return err instanceof Error && err.message === SESSION_EXPIRED;
-}
-
-// Single retry on 401: forces a token refresh in case the cached access token
-// has expired or its audience/scope drifted. If the SDK itself throws on the
-// token call (Missing Refresh Token / Login Required / Consent Required),
-// surface a structured session_expired error so the UI can show recovery.
-async function authedFetch(
-  path: string,
-  init: RequestInit,
-  getAccessTokenSilently: GetAccessToken,
-): Promise<Response> {
-  const send = async (forceRefresh: boolean): Promise<Response> => {
-    let token: string;
-    try {
-      token = await getAccessTokenSilently(
-        forceRefresh ? { cacheMode: "off" } : undefined,
-      );
-    } catch (err) {
-      const wrapped = new Error(SESSION_EXPIRED);
-      (wrapped as Error & { cause?: unknown }).cause = err;
-      throw wrapped;
-    }
-    return fetch(`${API_BASE}${path}`, {
-      ...init,
-      headers: {
-        ...(init.headers ?? {}),
-        Authorization: `Bearer ${token}`,
-      },
-    });
-  };
-  const res = await send(false);
-  if (res.status === 401) return send(true);
-  return res;
-}
 
 // The native EventSource API can't send an Authorization header, so we can't
 // use it without leaking the JWT into the URL (and server access logs). Instead
@@ -154,25 +116,6 @@ async function streamSse(
   } finally {
     reader.cancel().catch(() => {});
   }
-}
-
-// Inline recovery UI rendered by any component that catches a
-// session_expired error. The button triggers loginWithRedirect — one click
-// and the user is back through the Auth0 flow.
-function SessionExpiredNotice() {
-  const { loginWithRedirect } = useAuth0();
-  return (
-    <div className="session-expired">
-      <span>Your session expired.</span>
-      <button
-        type="button"
-        className="btn-primary"
-        onClick={() => void loginWithRedirect()}
-      >
-        Sign in again
-      </button>
-    </div>
-  );
 }
 
 function formatCost(cost: number | null | undefined): string {
@@ -687,6 +630,533 @@ function KeysPanel({
         </button>
         {addError ? <p className="error">{addError}</p> : null}
       </form>
+    </div>
+  );
+}
+
+type IntegrationType = "sendgrid" | "openai" | "anthropic" | "wordpress";
+
+const INTEGRATION_LABEL: Record<IntegrationType, string> = {
+  sendgrid: "SendGrid",
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  wordpress: "WordPress",
+};
+
+interface Integration {
+  id: string;
+  integration_type: IntegrationType;
+  config: Record<string, unknown>;
+  include_in_projects: boolean;
+  status: "pending" | "validated" | "failed";
+  last_validated_at: string | null;
+  validation_error: string | null;
+  identity?: Record<string, unknown>;
+  created_at: string;
+}
+
+// Human-readable identity line per type. openai/anthropic resolve the linked
+// provider_keys label (config.provider_key_id → keysById); freshly-added rows
+// fall back to the identity the POST returned. wordpress shows its site_url
+// (in config); sendgrid shows the account type the validator surfaced (POST
+// only — GET doesn't re-ping SendGrid).
+function describeIntegrationIdentity(
+  c: Integration,
+  keysById: Record<string, KeyRow>,
+  sessionIdentity: Record<string, unknown> | undefined,
+): string | null {
+  switch (c.integration_type) {
+    case "openai":
+    case "anthropic": {
+      const pkId =
+        typeof c.config.provider_key_id === "string"
+          ? c.config.provider_key_id
+          : null;
+      const fromKeys = pkId ? keysById[pkId]?.label : undefined;
+      const fromSession =
+        sessionIdentity && typeof sessionIdentity.label === "string"
+          ? sessionIdentity.label
+          : undefined;
+      const shown = fromKeys ?? fromSession;
+      if (shown) return `${INTEGRATION_LABEL[c.integration_type]} key: ${shown}`;
+      if (pkId) return `${INTEGRATION_LABEL[c.integration_type]} key (unavailable)`;
+      return null;
+    }
+    case "sendgrid": {
+      const type =
+        sessionIdentity && typeof sessionIdentity.type === "string"
+          ? sessionIdentity.type
+          : undefined;
+      return type ? `Account: ${type}` : null;
+    }
+    case "wordpress": {
+      const url =
+        typeof c.config.site_url === "string" ? c.config.site_url : null;
+      return url ? `Site: ${url}` : null;
+    }
+  }
+}
+
+function IntegrationsPanel({
+  getAccessTokenSilently,
+}: {
+  getAccessTokenSilently: GetAccessToken;
+}) {
+  const [integrations, setIntegrations] = useState<Integration[] | null>(null);
+  // Provider keys, loaded for the openai/anthropic dropdowns and to resolve
+  // linked-key labels in the list.
+  const [keys, setKeys] = useState<KeyRow[] | null>(null);
+  // Identity is returned by POST but not by GET (SendGrid's account type in
+  // particular). Keep a per-session map keyed by integration id so freshly
+  // added rows show identity confirmation until reload.
+  const [identities, setIdentities] = useState<
+    Record<string, Record<string, unknown>>
+  >({});
+  const [listError, setListError] = useState<string | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+
+  const [addType, setAddType] = useState<IntegrationType>("sendgrid");
+  const [addSendgridKey, setAddSendgridKey] = useState("");
+  const [addProviderKeyId, setAddProviderKeyId] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+
+  // WordPress uses a guided wizard for first connection and a separate module
+  // manager afterward, rather than the inline credential form the other types
+  // use.
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [moduleManager, setModuleManager] = useState<{
+    integrationId: string;
+    siteUrl: string;
+  } | null>(null);
+
+  const refresh = useCallback(async () => {
+    setListError(null);
+    setIntegrations(null);
+    try {
+      const [intRes, keysRes] = await Promise.all([
+        authedFetch("/api/integrations", {}, getAccessTokenSilently),
+        authedFetch("/api/keys", {}, getAccessTokenSilently),
+      ]);
+      if (!intRes.ok) {
+        setListError(
+          intRes.status >= 500
+            ? "Something went wrong on our end. Try again in a moment."
+            : "Couldn't load integrations.",
+        );
+        setIntegrations([]);
+        return;
+      }
+      const body = (await intRes.json()) as { integrations?: Integration[] };
+      setIntegrations(body.integrations ?? []);
+      // Keys are best-effort — the dropdowns degrade to "add a key first"
+      // guidance if this fails, so don't block the integrations list on it.
+      if (keysRes.ok) {
+        const keysBody = (await keysRes.json()) as { keys?: KeyRow[] };
+        setKeys(keysBody.keys ?? []);
+      } else {
+        setKeys([]);
+      }
+    } catch (err) {
+      if (isSessionExpired(err)) {
+        setSessionExpired(true);
+        return;
+      }
+      setListError("Couldn't reach the server. Try again.");
+      setIntegrations([]);
+    }
+  }, [getAccessTokenSilently]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const keysById = useMemo(() => {
+    const map: Record<string, KeyRow> = {};
+    for (const k of keys ?? []) map[k.id] = k;
+    return map;
+  }, [keys]);
+
+  // Provider keys matching the selected integration type (openai/anthropic).
+  const matchingKeys = useMemo(() => {
+    if (addType !== "openai" && addType !== "anthropic") return [];
+    return (keys ?? []).filter((k) => k.provider === addType);
+  }, [keys, addType]);
+
+  // Keep the selected provider key valid as the type (and thus the matching
+  // set) changes — default to the first match, or clear if none.
+  useEffect(() => {
+    if (addType !== "openai" && addType !== "anthropic") return;
+    setAddProviderKeyId((cur) =>
+      matchingKeys.some((k) => k.id === cur)
+        ? cur
+        : (matchingKeys[0]?.id ?? ""),
+    );
+  }, [addType, matchingKeys]);
+
+  const needsProviderKey = addType === "openai" || addType === "anthropic";
+  const noMatchingKey = needsProviderKey && matchingKeys.length === 0;
+
+  // WordPress is excluded — it connects through the wizard, not this form.
+  let canSubmit = false;
+  if (addType === "sendgrid") canSubmit = addSendgridKey.length > 0;
+  else if (needsProviderKey) canSubmit = addProviderKeyId.length > 0;
+
+  function resetForm() {
+    setAddSendgridKey("");
+    // addProviderKeyId is managed by the matchingKeys effect.
+  }
+
+  async function handleAdd(e: FormEvent) {
+    e.preventDefault();
+    setAddError(null);
+    setAdding(true);
+    try {
+      let payload: Record<string, unknown>;
+      if (addType === "sendgrid") {
+        payload = {
+          integration_type: "sendgrid",
+          credential: addSendgridKey,
+          config: {},
+        };
+      } else {
+        // needsProviderKey (openai/anthropic) — wordpress never reaches here.
+        payload = {
+          integration_type: addType,
+          config: { provider_key_id: addProviderKeyId },
+        };
+      }
+
+      const res = await authedFetch(
+        "/api/integrations",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+        getAccessTokenSilently,
+      );
+
+      if (res.status === 409) {
+        setAddError(
+          `You already have a ${INTEGRATION_LABEL[addType]} integration. Remove it first to add another.`,
+        );
+        return;
+      }
+
+      if (!res.ok) {
+        let msg =
+          res.status >= 500
+            ? "Something went wrong on our end. Try again in a moment."
+            : "Please check your input.";
+        try {
+          const body = (await res.json()) as {
+            error?: string;
+            reason?: string;
+          };
+          // Surface the validator's own message verbatim (e.g. the SendGrid
+          // 401/403 copy) — that's the point of validating at add time.
+          if (body?.reason) msg = body.reason;
+          else if (body?.error) msg = body.error;
+        } catch {
+          // body wasn't JSON; keep the status-derived message
+        }
+        setAddError(msg);
+        return;
+      }
+
+      const body = (await res.json()) as Integration & {
+        identity?: Record<string, unknown>;
+      };
+      if (body.identity) {
+        const newIdentity = body.identity;
+        setIdentities((prev) => ({ ...prev, [body.id]: newIdentity }));
+      }
+      resetForm();
+      await refresh();
+    } catch (err) {
+      if (isSessionExpired(err)) {
+        setSessionExpired(true);
+        return;
+      }
+      setAddError("Couldn't reach the server. Try again.");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function handleToggle(c: Integration) {
+    const previous = c.include_in_projects;
+    const next = !previous;
+    setListError(null);
+    // Optimistic — flip immediately, roll back if the PATCH fails.
+    setIntegrations((prev) =>
+      prev
+        ? prev.map((i) =>
+            i.id === c.id ? { ...i, include_in_projects: next } : i,
+          )
+        : prev,
+    );
+    const rollback = () =>
+      setIntegrations((prev) =>
+        prev
+          ? prev.map((i) =>
+              i.id === c.id ? { ...i, include_in_projects: previous } : i,
+            )
+          : prev,
+      );
+    try {
+      const res = await authedFetch(
+        `/api/integrations/${c.id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ include_in_projects: next }),
+        },
+        getAccessTokenSilently,
+      );
+      if (!res.ok) {
+        rollback();
+        setListError(
+          res.status >= 500
+            ? "Something went wrong on our end. Try again in a moment."
+            : "Couldn't update that integration.",
+        );
+      }
+    } catch (err) {
+      rollback();
+      if (isSessionExpired(err)) {
+        setSessionExpired(true);
+        return;
+      }
+      setListError("Couldn't reach the server. Try again.");
+    }
+  }
+
+  async function handleDelete(c: Integration) {
+    if (
+      !window.confirm(
+        `Remove the ${INTEGRATION_LABEL[c.integration_type]} integration?`,
+      )
+    ) {
+      return;
+    }
+    try {
+      const res = await authedFetch(
+        `/api/integrations/${c.id}`,
+        { method: "DELETE" },
+        getAccessTokenSilently,
+      );
+      if (!res.ok) {
+        setListError(
+          res.status >= 500
+            ? "Something went wrong on our end. Try again in a moment."
+            : "Couldn't remove that integration.",
+        );
+        return;
+      }
+      setIdentities((prev) => {
+        const copy = { ...prev };
+        delete copy[c.id];
+        return copy;
+      });
+      await refresh();
+    } catch (err) {
+      if (isSessionExpired(err)) {
+        setSessionExpired(true);
+        return;
+      }
+      setListError("Couldn't reach the server. Try again.");
+    }
+  }
+
+  if (sessionExpired) {
+    return (
+      <div className="settings-subsection">
+        <h3>Integrations</h3>
+        <SessionExpiredNotice />
+      </div>
+    );
+  }
+
+  return (
+    <div className="settings-subsection">
+      <h3>Integrations</h3>
+      <p className="muted">
+        Connect external services (email, AI providers, WordPress) so AI
+        Connect can wire them into projects it provisions for you.
+      </p>
+      {integrations === null && !listError ? (
+        <p className="muted">Loading…</p>
+      ) : null}
+      {listError ? <p className="error">{listError}</p> : null}
+      {integrations && integrations.length === 0 && !listError ? (
+        <p className="muted">No integrations yet. Add one below.</p>
+      ) : null}
+      {integrations && integrations.length > 0 ? (
+        <ul className="integrations-list">
+          {integrations.map((c) => {
+            const identity = describeIntegrationIdentity(
+              c,
+              keysById,
+              identities[c.id],
+            );
+            return (
+              <li key={c.id} className="integration-row">
+                <div className="integration-info">
+                  <div className="integration-main">
+                    <span className="integration-type">
+                      {INTEGRATION_LABEL[c.integration_type]}
+                    </span>
+                    {identity ? (
+                      <span className="integration-identity">{identity}</span>
+                    ) : null}
+                    {c.status === "failed" ? (
+                      <span className="badge-error">failed</span>
+                    ) : null}
+                  </div>
+                  <div className="integration-meta">
+                    Last validated: {formatRelativeTime(c.last_validated_at)}
+                  </div>
+                  {c.validation_error ? (
+                    <div className="error">{c.validation_error}</div>
+                  ) : null}
+                </div>
+                <div className="integration-actions">
+                  <label className="integration-toggle">
+                    <input
+                      type="checkbox"
+                      checked={c.include_in_projects}
+                      onChange={() => void handleToggle(c)}
+                    />
+                    <span>Include in new projects</span>
+                  </label>
+                  {c.integration_type === "wordpress" &&
+                  typeof c.config.site_url === "string" ? (
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() =>
+                        setModuleManager({
+                          integrationId: c.id,
+                          siteUrl: c.config.site_url as string,
+                        })
+                      }
+                    >
+                      Manage Modules
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="btn-danger"
+                    onClick={() => void handleDelete(c)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+
+      <form
+        className="add-integration-form"
+        onSubmit={(e) => void handleAdd(e)}
+      >
+        <div className="row">
+          <select
+            value={addType}
+            onChange={(e) => {
+              setAddType(e.target.value as IntegrationType);
+              setAddError(null);
+            }}
+          >
+            <option value="sendgrid">SendGrid</option>
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="wordpress">WordPress</option>
+          </select>
+        </div>
+
+        {addType === "sendgrid" ? (
+          <input
+            className="credential-input"
+            type="password"
+            placeholder="SendGrid API key (SG.…)"
+            value={addSendgridKey}
+            onChange={(e) => setAddSendgridKey(e.target.value)}
+            maxLength={1000}
+            required
+          />
+        ) : null}
+
+        {needsProviderKey ? (
+          noMatchingKey ? (
+            <p className="muted">
+              Add an {INTEGRATION_LABEL[addType]} key in “Provider keys” first.
+            </p>
+          ) : (
+            <select
+              value={addProviderKeyId}
+              onChange={(e) => setAddProviderKeyId(e.target.value)}
+            >
+              {matchingKeys.map((k) => (
+                <option key={k.id} value={k.id}>
+                  {k.label}
+                  {k.is_default ? " (default)" : ""}
+                </option>
+              ))}
+            </select>
+          )
+        ) : null}
+
+        {addType === "wordpress" ? (
+          <>
+            <p className="muted">
+              Connecting WordPress installs a plugin on your site. The wizard
+              walks you through it — about 2 minutes.
+            </p>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => setWizardOpen(true)}
+            >
+              Connect WordPress Site
+            </button>
+          </>
+        ) : (
+          <button
+            type="submit"
+            className="btn-primary"
+            disabled={adding || !canSubmit}
+          >
+            {adding ? "Adding…" : "Add integration"}
+          </button>
+        )}
+        {addError ? <p className="error">{addError}</p> : null}
+      </form>
+
+      {wizardOpen ? (
+        <WordPressWizard
+          getAccessTokenSilently={getAccessTokenSilently}
+          onClose={() => setWizardOpen(false)}
+          onConnected={() => void refresh()}
+          onManageModules={(integrationId, siteUrl) => {
+            setWizardOpen(false);
+            setModuleManager({ integrationId, siteUrl });
+          }}
+        />
+      ) : null}
+
+      {moduleManager ? (
+        <WordPressModuleManager
+          getAccessTokenSilently={getAccessTokenSilently}
+          integrationId={moduleManager.integrationId}
+          siteUrl={moduleManager.siteUrl}
+          onClose={() => setModuleManager(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1761,6 +2231,9 @@ export function App() {
               getAccessTokenSilently={getAccessTokenSilently}
             />
             <KeysPanel getAccessTokenSilently={getAccessTokenSilently} />
+            <IntegrationsPanel
+              getAccessTokenSilently={getAccessTokenSilently}
+            />
             <PromptTester
               getAccessTokenSilently={getAccessTokenSilently}
             />

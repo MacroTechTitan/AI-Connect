@@ -50,6 +50,13 @@
       "when": 1781359929519,
       "tag": "0006_even_skreet",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1781474338914,
+      "tag": "0007_sleepy_living_mummy",
+      "breakpoints": true
     }
   ]
 }

@@ -313,6 +313,26 @@ C. Build a minimal POC during Sprint 6 (Auth0 sprint) on the side, see if it cha
 
 C is interesting because the founder is currently feeling the pain directly. Even a crude version that eliminates 50% of copy-pastes would be useful immediately.
 
+## Deferred infrastructure
+
+### Migrate AI Connect's own database to MTT-AIConnect Supabase org
+
+Currently AI Connect's production database lives at supabase project rmbolhoizdwykpqmlhzw in the MacroTechTitan organization (alongside OptimaQuant, rfl-pst-portal, and other unrelated projects).
+
+A dedicated MTT-AIConnect Supabase organization has been created (project uiyozvlrsrhrqzsalsum at https://uiyozvlrsrhrqzsalsum.supabase.co) for AI Connect's own data and for projects it provisions on users' behalf.
+
+The new org is currently dormant — Sprint 6 work (migration 0007 / integrations table) was applied to the existing prod database to avoid mid-sprint migration risk.
+
+When ready to migrate:
+- pg_dump from rmbolhoizdwykpqmlhzw, restore to uiyozvlrsrhrqzsalsum
+- Update DATABASE_URL on Render's ai-connect-api service
+- Redeploy and verify
+- Decommission the original project once confidence is high
+
+Also update the Supabase platform credential in AI Connect so that PROJECT GENESIS provisions new client Supabase projects under the MTT-AIConnect org rather than MacroTechTitan. This is the actual value of the migration — keeps user-provisioned databases organizationally separate from your other businesses.
+
+No deadline. Defer until between sprints to minimize disruption.
+
 ---
 
 *Last updated: 2026-06-13*

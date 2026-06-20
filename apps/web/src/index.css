@@ -625,6 +625,304 @@ html, body, #root { margin: 0; min-height: 100vh; }
   margin-top: 0.5rem;
 }
 
+/* Integrations panel. */
+.integrations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.integration-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.35rem;
+  font-size: 0.9rem;
+}
+.integration-row .integration-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.integration-row .integration-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: baseline;
+}
+.integration-row .integration-type {
+  font-weight: 600;
+}
+.integration-row .integration-identity {
+  font-size: 0.78rem;
+  opacity: 0.7;
+  word-break: break-all;
+}
+.integration-row .integration-meta {
+  font-size: 0.75rem;
+  opacity: 0.55;
+}
+.integration-row .badge-error {
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  color: #f87171;
+  border-radius: 0.3rem;
+}
+.integration-row .integration-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+.integration-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  opacity: 0.85;
+  cursor: pointer;
+}
+.add-integration-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.add-integration-form .row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.add-integration-form select,
+.add-integration-form input {
+  background: #15171c;
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.35rem;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  font-size: 0.9rem;
+}
+.add-integration-form select {
+  min-width: 8rem;
+}
+.add-integration-form .label-input {
+  flex: 1;
+  min-width: 12rem;
+}
+.add-integration-form .credential-input {
+  width: 100%;
+}
+
+/* WordPress connection wizard (modal overlay). */
+.wp-wizard-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 50;
+}
+.wp-wizard {
+  width: 100%;
+  max-width: 32rem;
+  background: #15171c;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.6rem;
+  padding: 1.25rem 1.5rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.wp-wizard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.wp-wizard-progress {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.55;
+}
+.wp-wizard-step {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+.wp-wizard-step h3 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+.wp-wizard-step p {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  opacity: 0.85;
+}
+.wp-wizard-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.wp-wizard-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  opacity: 0.85;
+}
+.wp-wizard-field input {
+  background: #0f1115;
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.35rem;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  font-size: 0.9rem;
+}
+.wp-wizard-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+/* WordPress module manager. */
+.wp-module-manager {
+  margin-top: 0.6rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.4rem;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.wp-module-manager-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.wp-module-manager-head h4 {
+  margin: 0;
+  font-size: 0.95rem;
+  word-break: break-all;
+}
+.wp-module-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.wp-module-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.35rem;
+}
+.wp-module-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.wp-module-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.wp-module-slug {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+  font-size: 0.75rem;
+  opacity: 0.6;
+}
+.wp-module-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.8rem;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+.wp-module-source {
+  color: #58a6ff;
+  word-break: break-all;
+}
+.wp-module-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+.wp-module-actions .btn-primary {
+  text-decoration: none;
+  text-align: center;
+}
+.wp-module-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 0.75rem;
+}
+.wp-module-form h5 {
+  margin: 0;
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+.wp-module-form .row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+.wp-module-form input,
+.wp-module-form select {
+  background: #0f1115;
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.35rem;
+  padding: 0.45rem 0.6rem;
+  font: inherit;
+  font-size: 0.88rem;
+}
+.wp-module-form .label-input {
+  flex: 1;
+  min-width: 10rem;
+}
+.wp-module-form .credential-input {
+  width: 100%;
+}
+.wp-module-tier-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  opacity: 0.85;
+}
+
 .footer {
   text-align: center;
   font-size: 0.8rem;

@@ -4,11 +4,13 @@ import { env } from "./lib/env.js";
 import { logger } from "./lib/logger.js";
 import { seedAdmin } from "./lib/seed.js";
 import { registerAdminRoutes } from "./routes/admin.js";
+import { registerIntegrationsRoutes } from "./routes/integrations.js";
 import { registerKeysRoutes } from "./routes/keys.js";
 import { registerMeRoutes } from "./routes/me.js";
 import { registerPlatformCredentialsRoutes } from "./routes/platformCredentials.js";
 import { registerProjectsRoutes } from "./routes/projects.js";
 import { registerPromptRoutes } from "./routes/prompt.js";
+import { registerWordPressPluginRoutes } from "./routes/wordpressPlugin.js";
 
 const app = express();
 
@@ -80,6 +82,15 @@ registerProjectsRoutes(app);
 // /api/platform-credentials — Auth0 JWT-gated CRUD for hosting platform
 // credentials (Vercel/Render/GitHub/Supabase). Secrets live in Supabase Vault.
 registerPlatformCredentialsRoutes(app);
+
+// /api/integrations — Auth0 JWT-gated CRUD for third-party integrations
+// (SendGrid/OpenAI/Anthropic/WordPress). Credential-bearing types store secrets
+// in Supabase Vault; openai/anthropic reference an existing provider_keys row.
+registerIntegrationsRoutes(app);
+
+// /api/integrations/wordpress/plugin.zip — Auth0 JWT-gated; streams the AI
+// Connect WordPress plugin as a .zip generated on the fly from wp-plugin/.
+registerWordPressPluginRoutes(app);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "not_found" });
