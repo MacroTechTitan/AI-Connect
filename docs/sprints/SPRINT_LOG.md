@@ -311,6 +311,61 @@ Sprint 4 (MVP) -> Sprint 5 (templates+DNS+envs, broken) -> Sprint 5.5 (template 
 ### Sprint 6 starting point
 Per the architecture sketch + product positioning conversation during this arc, Sprint 6 pivots from the original 'Auth0 tenant scaffolding per project' to an integration arc: Integration UI pattern + SendGrid + OpenAI per-project + Anthropic per-project + WordPress with a custom AI Connect plugin. Auth0 and Stripe deferred. Custom domains deferred. Path B (takeover existing projects) also deferred. Full Sprint 6 scope captured separately in upcoming planning doc.
 
+## Sprint 6 — Build and Ship (integration foundation + WordPress gated apps) (2026-06-20)
+- Branch: sprint/6-build-and-ship
+- Merged via PR #12 on 2026-06-20
+- 9 commits: spec, migration 0007, backend foundation, SendGrid validator, OpenAI validator, Anthropic validator, frontend Integrations panel, MTTBuild health check toggle docs, WordPress combined (plugin + wizard + module manager)
+
+### What shipped
+- New integrations table (migration 0007) with per-user, per-type uniqueness, vault-secret references, jsonb config, validation status tracking
+- apps/api/src/lib/integrations/ — types, validator registry using factory pattern ((userId) => IntegrationValidator), per-type validators for SendGrid (hits GET /v3/user/account), OpenAI (links provider_keys + ownership check), Anthropic (mirror of OpenAI)
+- apps/api/src/routes/integrations.ts — CRUD routes mirroring platformCredentials.ts conventions (auth middleware, vault-before-DB, org scoping, logUserAction)
+- WordPress plugin v1 (wp-plugin/ai-connect/) — FIRST PHP IN THIS REPO. Token-authenticated REST API at ai-connect/v1 (ping, status, modules CRUD). Modules stored in WordPress wp_options table (not static JSON) so AI Connect can add/edit/delete modules via REST without re-uploading the plugin. Dynamic page registration via init hook + template_redirect. MemberPress integration with graceful fallback when not installed
+- WordPress validator hits the plugin's /ping endpoint
+- Plugin .zip generation endpoint (apps/api/src/routes/wordpressPlugin.ts) streams the plugin via archiver
+- wordpressClient (apps/api/src/lib/integrations/wordpressClient.ts) wraps the plugin REST API for module operations
+- Frontend Integrations panel (App.tsx) — collapsible panel parallel to Hosting connections. Per-type input branching, optimistic include_in_projects toggle, delete with confirmation
+- WordPressWizard (apps/web/src/components/WordPressWizard.tsx) — six-step modal: welcome, download plugin, install instructions, get token, enter site URL + token, success
+- WordPressModuleManager (apps/web/src/components/WordPressModuleManager.tsx) — list/add/edit/remove modules with tier dropdown auto-populated from /status
+- MTTBuild Health check toggle (docs/MTTBuild.md) — default OFF. User explicitly opts into mid-session check-ins; default behavior is forward-progress without interruption
+
+### Why this matters
+Sprint 6 is the integration arc — AI Connect's first user-facing layer where users connect third-party services AND embed external apps as MemberPress-gated WordPress pages. The headline feature (WordPress gated apps) eliminates a multi-day setup that previously required manually configuring cross-domain auth, MemberPress checks, and embedded routing for every sub-app a user wanted to gate. Now: 4 clicks.
+
+### Smoke test (2026-06-20)
+1. Account: jgelet@macrotechtitan.com (Auth0 production tenant)
+2. WordPress plugin .zip downloaded from /api/integrations/wordpress/plugin.zip — 25KB, archived correctly
+3. Plugin uploaded to lifehackprotocol.com, activated, token generated in Settings → AI Connect
+4. AI Connect WordPress wizard step 5: site URL + token → /ping validation returned 200 with plugin version 1.0.0
+5. WordPress integration appeared in Integrations panel with "Connected" badge
+6. Module added: slug=testapp, source_url=https://example.com, required tier=Member
+7. Visited lifehackprotocol.com/testapp/ in incognito (logged out) — gating UI rendered correctly: "Members only — This content requires Member - Life Hack Protocol membership" with Log in + Become a member buttons
+
+End-to-end gating mechanism VERIFIED in production on lifehackprotocol.com.
+
+### What's NOT done (deferred)
+- Logged-in-with-tier iframe verification (need test user with Member tier in lifehackprotocol.com — not yet validated tonight)
+- The "Stripe Connect + AWS S3/SES" Sprint 6 candidates were CUT during scoping in favor of WordPress focus
+- Reverse-proxy (non-iframe) WordPress modules — Sprint 7+
+- Auto-sync of plugin .zip from AI Connect to WordPress — Sprint 7+
+- Generic membership plugin support (LearnDash, RCP, WooCommerce Memberships) — Sprint 7+
+- Multi-account integrations — Sprint 7+
+- Build-from-source WordPress modules (AI Connect builds an app from a repo, packages as module) — Sprint 7+
+- AI-generated WordPress modules — Sprint 12+ (likely never; defer to Lovable/Cursor for code generation)
+- AI Connect help documentation (planned for Sprint 6.5)
+
+### Known deployment surface
+- Plugin .zip route uses ../../../../ relative path to wp-plugin/ directory. Worked on Render in production smoke test, but is fragile if rootDir or build process changes. Fix-forward when it breaks.
+- PHP plugin was not lint-checked with php -l before shipping (no PHP locally). Smoke test verified runtime behavior.
+- ai-connect.macrotechtitan.com/help route does not exist yet — Sprint 6.5 work.
+
+### Sprint 7 starting point
+Two candidates for Sprint 7:
+- AI Connect help center (in-app docs, sidebar navigation, ? links from each panel) — gets users self-sufficient
+- WordPress module enhancements: tier check fixed for logged-in members, more iframe-friendly default page styling, "build from your AI Connect project" template integration — extends the WordPress integration
+
+The user's preference at end of Sprint 6 was building a real macro calculator app to embed as a WordPress module on lifehackprotocol.com. That's its own Sprint 7+ scope (real app development, not AI Connect feature work).
+
 ---
 
-*Last updated: 2026-06-13*
+*Last updated: 2026-06-20*
