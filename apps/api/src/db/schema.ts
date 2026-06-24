@@ -464,7 +464,7 @@ export const integrations = pgTable(
   (table) => ({
     integrationTypeCheck: check(
       "integrations_integration_type_check",
-      sql`${table.integrationType} IN ('sendgrid', 'openai', 'anthropic', 'wordpress')`,
+      sql`${table.integrationType} IN ('sendgrid', 'openai', 'anthropic', 'wordpress', 'openclaw')`,
     ),
     statusCheck: check(
       "integrations_status_check",
