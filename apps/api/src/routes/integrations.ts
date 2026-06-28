@@ -832,6 +832,40 @@ async function handleSendOpenClawMessage(
   }
 }
 
+// Pre-creation agent discovery. The wizard calls this with a bare bridge_path
+// (no integration row yet) so the user can pick a default agent before the
+// integration is created. Unlike the /:id routes there's no DB row to scope —
+// the gate is local mode + auth. Refused in cloud mode like the others.
+async function handleOpenClawDiscover(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  if (!isLocalMode()) {
+    res.status(LOCAL_ONLY_ERROR.status).json({
+      error: LOCAL_ONLY_ERROR.code,
+      message: LOCAL_ONLY_ERROR.message,
+    });
+    return;
+  }
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const bridgePath = body.bridge_path;
+  if (typeof bridgePath !== "string" || bridgePath.length === 0) {
+    res.status(400).json({
+      error: "bridge_path_required",
+      message: "bridge_path is required.",
+    });
+    return;
+  }
+
+  try {
+    const agents = await openclawClient.listAgents(bridgePath);
+    res.status(200).json({ agents });
+  } catch (err) {
+    handleOpenClawError(err, res);
+  }
+}
+
 export function registerIntegrationsRoutes(app: Express): void {
   app.post(
     "/api/integrations",
@@ -890,8 +924,16 @@ export function registerIntegrationsRoutes(app: Express): void {
     handleDeleteModule,
   );
 
-  // OpenClaw agent access — proxies to the local maximus-bridge. Both refuse
-  // in cloud mode (503 openclaw_local_only).
+  // OpenClaw agent access — proxies to the local maximus-bridge. All refuse
+  // in cloud mode (503 openclaw_local_only). The literal /openclaw/discover
+  // path is registered before the parameterized /:id routes so Express never
+  // mistakes "openclaw" for an :id.
+  app.post(
+    "/api/integrations/openclaw/discover",
+    requireAuth,
+    requireHydratedUser,
+    handleOpenClawDiscover,
+  );
   app.get(
     "/api/integrations/:id/agents",
     requireAuth,

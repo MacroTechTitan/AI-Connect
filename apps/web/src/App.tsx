@@ -8,10 +8,12 @@ import {
   type FormEvent,
 } from "react";
 
+import { OpenClawWizard } from "./components/OpenClawWizard";
 import { SessionExpiredNotice } from "./components/SessionExpiredNotice";
 import { WordPressModuleManager } from "./components/WordPressModuleManager";
 import { WordPressWizard } from "./components/WordPressWizard";
 import {
+  API_BASE,
   authedFetch,
   isSessionExpired,
   type GetAccessToken,
@@ -634,13 +636,19 @@ function KeysPanel({
   );
 }
 
-type IntegrationType = "sendgrid" | "openai" | "anthropic" | "wordpress";
+type IntegrationType =
+  | "sendgrid"
+  | "openai"
+  | "anthropic"
+  | "wordpress"
+  | "openclaw";
 
 const INTEGRATION_LABEL: Record<IntegrationType, string> = {
   sendgrid: "SendGrid",
   openai: "OpenAI",
   anthropic: "Anthropic",
   wordpress: "WordPress",
+  openclaw: "OpenClaw",
 };
 
 interface Integration {
@@ -694,6 +702,13 @@ function describeIntegrationIdentity(
         typeof c.config.site_url === "string" ? c.config.site_url : null;
       return url ? `Site: ${url}` : null;
     }
+    case "openclaw": {
+      const agent =
+        typeof c.config.default_agent === "string"
+          ? c.config.default_agent
+          : null;
+      return agent ? `Default agent: ${agent}` : null;
+    }
   }
 }
 
@@ -729,6 +744,29 @@ function IntegrationsPanel({
     integrationId: string;
     siteUrl: string;
   } | null>(null);
+
+  // OpenClaw also uses a guided wizard. It's local-only: the OpenClaw option is
+  // disabled when the API reports cloud mode. null = not yet known.
+  const [openclawWizardOpen, setOpenclawWizardOpen] = useState(false);
+  const [localMode, setLocalMode] = useState<boolean | null>(null);
+
+  // /health is auth-free and DB-free; read local_mode from the same API the
+  // rest of the panel talks to (API_BASE), not the hardcoded prod health URL.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/health`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error("no"))))
+      .then((body: { local_mode?: boolean }) => {
+        if (!cancelled) setLocalMode(Boolean(body.local_mode));
+      })
+      .catch(() => {
+        // Assume cloud mode if we can't tell — fail safe toward "disabled".
+        if (!cancelled) setLocalMode(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
     setListError(null);
@@ -1076,6 +1114,17 @@ function IntegrationsPanel({
             <option value="openai">OpenAI</option>
             <option value="anthropic">Anthropic</option>
             <option value="wordpress">WordPress</option>
+            <option
+              value="openclaw"
+              disabled={localMode === false}
+              title={
+                localMode === false
+                  ? "OpenClaw integrations require AI Connect running locally. See LOCAL_MODE.md."
+                  : undefined
+              }
+            >
+              OpenClaw{localMode === false ? " (local only)" : ""}
+            </option>
           </select>
         </div>
 
@@ -1125,6 +1174,21 @@ function IntegrationsPanel({
               Connect WordPress Site
             </button>
           </>
+        ) : addType === "openclaw" ? (
+          <>
+            <p className="muted">
+              Connecting OpenClaw lets AI Connect talk to a local agent through
+              the maximus-bridge. The wizard walks you through it — local mode
+              only.
+            </p>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => setOpenclawWizardOpen(true)}
+            >
+              Connect OpenClaw
+            </button>
+          </>
         ) : (
           <button
             type="submit"
@@ -1145,6 +1209,20 @@ function IntegrationsPanel({
           onManageModules={(integrationId, siteUrl) => {
             setWizardOpen(false);
             setModuleManager({ integrationId, siteUrl });
+          }}
+        />
+      ) : null}
+
+      {openclawWizardOpen ? (
+        <OpenClawWizard
+          getAccessTokenSilently={getAccessTokenSilently}
+          onClose={() => setOpenclawWizardOpen(false)}
+          onConnected={() => void refresh()}
+          onManageAgents={() => {
+            // The agent manager arrives in Sprint 7 Commit 7. Until then,
+            // "Manage Agents" just closes the wizard and refreshes the list.
+            setOpenclawWizardOpen(false);
+            void refresh();
           }}
         />
       ) : null}
