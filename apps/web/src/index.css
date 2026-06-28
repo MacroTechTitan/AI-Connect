@@ -881,6 +881,153 @@ html, body, #root { margin: 0; min-height: 100vh; }
   word-break: break-word;
 }
 
+/* "Local mode only" pill on cloud-mode OpenClaw integration rows. */
+.badge-local-only {
+  font-size: 0.7rem;
+  font-style: italic;
+  letter-spacing: 0.03em;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 0.3rem;
+  opacity: 0.7;
+}
+
+/* OpenClaw agent manager — inline panel under the integrations list. */
+.openclaw-mgr {
+  margin-top: 0.6rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.4rem;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.openclaw-mgr-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.openclaw-mgr-title {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.openclaw-mgr-title h4 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+.openclaw-mgr-bridge {
+  font-size: 0.75rem;
+  opacity: 0.55;
+  word-break: break-all;
+}
+.openclaw-mgr-body {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.openclaw-mgr-agents {
+  flex: 1 1 14rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.openclaw-mgr-chat {
+  flex: 2 1 18rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.openclaw-mgr-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.openclaw-mgr-section-head h5 {
+  margin: 0;
+  font-size: 0.85rem;
+}
+.openclaw-chat-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 18rem;
+  overflow-y: auto;
+}
+.openclaw-chat-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-width: 85%;
+}
+.openclaw-chat-user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+.openclaw-chat-agent {
+  align-self: flex-start;
+  padding-left: 0.5rem;
+}
+.openclaw-chat-system {
+  align-self: stretch;
+  max-width: 100%;
+}
+.openclaw-chat-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.55;
+}
+.openclaw-chat-bubble {
+  padding: 0.45rem 0.6rem;
+  border-radius: 0.4rem;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #0f1115;
+}
+.openclaw-chat-user .openclaw-chat-bubble {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.35);
+}
+.openclaw-chat-system .openclaw-chat-bubble {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
+.openclaw-chat-time {
+  font-size: 0.68rem;
+  opacity: 0.45;
+}
+.openclaw-mgr-compose {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.openclaw-mgr-input {
+  background: #0f1115;
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.35rem;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  font-size: 0.9rem;
+  resize: vertical;
+}
+.openclaw-mgr-charcount {
+  font-size: 0.72rem;
+  align-self: flex-end;
+}
+
 /* WordPress module manager. */
 .wp-module-manager {
   margin-top: 0.6rem;

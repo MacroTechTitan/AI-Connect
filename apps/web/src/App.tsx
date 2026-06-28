@@ -8,6 +8,7 @@ import {
   type FormEvent,
 } from "react";
 
+import { OpenClawAgentManager } from "./components/OpenClawAgentManager";
 import { OpenClawWizard } from "./components/OpenClawWizard";
 import { SessionExpiredNotice } from "./components/SessionExpiredNotice";
 import { WordPressModuleManager } from "./components/WordPressModuleManager";
@@ -749,6 +750,18 @@ function IntegrationsPanel({
   // disabled when the API reports cloud mode. null = not yet known.
   const [openclawWizardOpen, setOpenclawWizardOpen] = useState(false);
   const [localMode, setLocalMode] = useState<boolean | null>(null);
+  // Inline agent manager (opened from a row or from the wizard's final step).
+  // Only the id is required to call the API; bridge_path/default_agent are for
+  // display + initial selection and may be absent (wizard path).
+  const [agentManager, setAgentManager] = useState<{
+    integrationId: string;
+    bridgePath?: string;
+    defaultAgent?: string;
+  } | null>(null);
+  // Light-touch "Test Connection" result per integration id.
+  const [testStatus, setTestStatus] = useState<
+    Record<string, { ok: boolean; msg: string }>
+  >({});
 
   // /health is auth-free and DB-free; read local_mode from the same API the
   // rest of the panel talks to (API_BASE), not the hardcoded prod health URL.
@@ -1008,6 +1021,51 @@ function IntegrationsPanel({
     }
   }
 
+  // Light-touch revalidation for OpenClaw: GET /agents and surface ok/fail
+  // inline on the row (no toast system in this app). Result clears on next run.
+  async function handleTestConnection(c: Integration) {
+    setTestStatus((prev) => {
+      const next = { ...prev };
+      delete next[c.id];
+      return next;
+    });
+    try {
+      const res = await authedFetch(
+        `/api/integrations/${c.id}/agents`,
+        {},
+        getAccessTokenSilently,
+      );
+      if (res.ok) {
+        const body = (await res.json().catch(() => ({}))) as {
+          agents?: unknown[];
+        };
+        const count = Array.isArray(body.agents) ? body.agents.length : 0;
+        setTestStatus((prev) => ({
+          ...prev,
+          [c.id]: { ok: true, msg: `Connected — ${count} agent(s) reachable.` },
+        }));
+        return;
+      }
+      let msg = "Connection failed.";
+      try {
+        const body = (await res.json()) as { message?: string; error?: string };
+        msg = body.message ?? body.error ?? msg;
+      } catch {
+        // keep default
+      }
+      setTestStatus((prev) => ({ ...prev, [c.id]: { ok: false, msg } }));
+    } catch (err) {
+      if (isSessionExpired(err)) {
+        setSessionExpired(true);
+        return;
+      }
+      setTestStatus((prev) => ({
+        ...prev,
+        [c.id]: { ok: false, msg: "Couldn't reach the server. Try again." },
+      }));
+    }
+  }
+
   if (sessionExpired) {
     return (
       <div className="settings-subsection">
@@ -1052,12 +1110,25 @@ function IntegrationsPanel({
                     {c.status === "failed" ? (
                       <span className="badge-error">failed</span>
                     ) : null}
+                    {c.integration_type === "openclaw" &&
+                    localMode === false ? (
+                      <span className="badge-local-only">
+                        Local mode only
+                      </span>
+                    ) : null}
                   </div>
                   <div className="integration-meta">
                     Last validated: {formatRelativeTime(c.last_validated_at)}
                   </div>
                   {c.validation_error ? (
                     <div className="error">{c.validation_error}</div>
+                  ) : null}
+                  {testStatus[c.id] ? (
+                    <div
+                      className={testStatus[c.id]!.ok ? "muted" : "error"}
+                    >
+                      {testStatus[c.id]!.msg}
+                    </div>
                   ) : null}
                 </div>
                 <div className="integration-actions">
@@ -1083,6 +1154,48 @@ function IntegrationsPanel({
                     >
                       Manage Modules
                     </button>
+                  ) : null}
+                  {c.integration_type === "openclaw" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        disabled={localMode === false}
+                        title={
+                          localMode === false
+                            ? "OpenClaw integrations require AI Connect running locally. See LOCAL_MODE.md."
+                            : undefined
+                        }
+                        onClick={() =>
+                          setAgentManager({
+                            integrationId: c.id,
+                            bridgePath:
+                              typeof c.config.bridge_path === "string"
+                                ? c.config.bridge_path
+                                : undefined,
+                            defaultAgent:
+                              typeof c.config.default_agent === "string"
+                                ? c.config.default_agent
+                                : undefined,
+                          })
+                        }
+                      >
+                        Manage Agents
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        disabled={localMode === false}
+                        title={
+                          localMode === false
+                            ? "OpenClaw integrations require AI Connect running locally. See LOCAL_MODE.md."
+                            : undefined
+                        }
+                        onClick={() => void handleTestConnection(c)}
+                      >
+                        Test Connection
+                      </button>
+                    </>
                   ) : null}
                   <button
                     type="button"
@@ -1218,12 +1331,24 @@ function IntegrationsPanel({
           getAccessTokenSilently={getAccessTokenSilently}
           onClose={() => setOpenclawWizardOpen(false)}
           onConnected={() => void refresh()}
-          onManageAgents={() => {
-            // The agent manager arrives in Sprint 7 Commit 7. Until then,
-            // "Manage Agents" just closes the wizard and refreshes the list.
+          onManageAgents={(integrationId) => {
+            // Close the wizard and open the agent manager on the just-created
+            // integration. The manager only needs the id to call the API; it
+            // fetches agents and picks the default itself.
             setOpenclawWizardOpen(false);
+            setAgentManager({ integrationId });
             void refresh();
           }}
+        />
+      ) : null}
+
+      {agentManager ? (
+        <OpenClawAgentManager
+          getAccessTokenSilently={getAccessTokenSilently}
+          integrationId={agentManager.integrationId}
+          bridgePath={agentManager.bridgePath}
+          defaultAgent={agentManager.defaultAgent}
+          onClose={() => setAgentManager(null)}
         />
       ) : null}
 
