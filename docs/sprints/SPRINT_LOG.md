@@ -366,6 +366,59 @@ Two candidates for Sprint 7:
 
 The user's preference at end of Sprint 6 was building a real macro calculator app to embed as a WordPress module on lifehackprotocol.com. That's its own Sprint 7+ scope (real app development, not AI Connect feature work).
 
+## Sprint 7 — OpenClaw Integration (Local Mode) (2026-06-24)
+- Branch: sprint/7-openclaw-integration
+- Merged via PR #14 on 2026-06-24
+- 8 commits: spec, migration 0008, types+validator+mode detection, client wrapper, routes, wizard UI, agent manager, docs
+
+### What shipped
+- First local-mode integration. AI Connect can now run on the same host as a target system (OpenClaw) and drive it via stdio MCP. Cloud AI Connect cleanly refuses with 503 'openclaw_local_only'.
+- ``apps/api/src/lib/mode.ts`` — ``isLocalMode()`` env-driven detection. True if AICONNECT_LOCAL_MODE=true OR OPENCLAW_BIN set. ``LOCAL_ONLY_ERROR`` for consistent 503 short-circuits.
+- Migration 0008: extended ``integrations_integration_type_check`` to include 'openclaw'. Applied to AI Connect Supabase manually via SQL editor.
+- ``apps/api/src/lib/integrations/openclawClient.ts`` — OpenClawClient class with listAgents, sendMessage, listTools. Each spawns the bridge as stateless child process per call (no long-lived MCP connection in v1). MCP initialize + tools/call handshake over stdio. MAXIMUS_READONLY=true at every spawn. 30s init / 60s call timeouts. OpenClawError typed with 9-code union.
+- ``apps/api/src/lib/integrations/validators/openclaw.ts`` — cloud-mode refusal, shape/existence checks, listTools confirm list_agents + send_message present, listAgents confirm default_agent in returned list.
+- ``apps/api/src/routes/integrations.ts`` — GET /:id/agents, POST /:id/messages, POST /openclaw/discover. All three short-circuit in cloud mode. OpenClawError → HTTP: bridge_timeout 504, agent_not_found 404, others 502. Message route validates ≤10k chars, audits via logUserAction (length-only, not content).
+- ``apps/web/src/components/OpenClawWizard.tsx`` — 6-step modal parallel to WordPressWizard. Welcome (security warning) → bridge path → discover → pick agent → test message ("reply OK") → success.
+- ``apps/web/src/components/OpenClawAgentManager.tsx`` — two-pane: agent list (default badge, identity, workspace, model) + conversation (autogrowing textarea, 10k cap, char count >8k, optimistic user message, in-memory history last 10). HTTP status → friendly error mapping.
+- App.tsx IntegrationsPanel: OpenClaw added with cloud-mode gating. Disabled type selector option, disabled Manage Agents button, "Local mode only" pill on rows. Local mode detected via /health extension (local_mode boolean).
+- /health route extended with isLocalMode() output.
+- ``docs/LOCAL_MODE.md`` — user-facing setup guide. Prereqs, env vars (AICONNECT_LOCAL_MODE, OPENCLAW_BIN, DATABASE_URL pointing at prod Supabase), wizard walkthrough, security notes, troubleshooting. Corrects several env-var inaccuracies the spec doc had (port 8080 not 3000, VITE_API_BASE_URL not VITE_API_URL, audience aiconnect.macrotechtitan.com not optimaquant.com).
+- ``docs/sprints/SPRINT_7_TESTING.md`` — end-to-end smoke test plan (A through G).
+
+### Why this matters
+Sprint 7 is AI Connect's first integration that requires running on the user's host. Architectural precedent: same TypeScript codebase, same Supabase, two deployments (cloud + local). Sets the pattern for future local-only integrations (Cursor MCP, Claude Desktop, etc.). The "Build and Ship" story expands — Sprint 6 embedded external apps via WordPress; Sprint 7 drives local AI agents via cloud orchestration. From a moat perspective: AI Connect becomes the routing layer for hybrid cloud+local AI workflows. The horse pulls; AI Connect decides.
+
+### Smoke test (deferred to first local-mode session)
+Sprint 7 smoke test plan documented in docs/sprints/SPRINT_7_TESTING.md. Sections A-F cover cloud-mode gating, local startup, shared DB verification, wizard flow, agent manager round-trip, cloud-mode list gating. Section G covers validation error coverage. To be run on Joseph's Mac mini with OpenClaw v2026.2.6-3 + maximus-bridge v0.2.0.
+
+NOT YET EXECUTED. Sprint 7 is shipped from a code perspective; live verification awaits the first local-mode session.
+
+### What's NOT done (deferred to Sprint 7.5+)
+- Smoke test on Mac mini — first local-mode session
+- Network transport (SSH or HTTPS) so cloud AI Connect can drive remote OpenClaw — Sprint 7.5+
+- Long-lived MCP connection pool (faster repeated calls) — Sprint 7.5+
+- Message history persistence — Sprint 7.5+ (in-memory only, last 10)
+- Streaming agent responses — would need bridge changes
+- Multi-message conversation context — each send is independent currently
+- Agent skill discovery / per-skill UI — Sprint 7.5+
+- Auto-detect OpenClaw across common install locations — Sprint 7.5+
+- Read-write mode (MAXIMUS_READONLY=false) — never until deliberate security review
+- Supabase CLI integration for automated migrations — Sprint 7.5+
+- Help center / user manual — Sprint 8
+- AI Connect Design System (UI as a feature) — Sprint 8
+- Auth0 + Stripe as both connectors AND internal integrations — Sprint 8
+
+### Known deployment surface
+- /health route extended with local_mode boolean. Cloud reports false. No new env vars on Render.
+- Cloud production cleanly returns 503 'openclaw_local_only' on all OpenClaw endpoints. No errors, no missing config.
+- For local mode setup, follow docs/LOCAL_MODE.md exactly. Several env vars must match production (DATABASE_URL, AUTH0_*) — treat local .env.local like a password.
+
+### Sprint 8 candidates locked from conversation
+- AI Connect Design System ("UI as a feature" — design tokens, shared component library, typography scale, color tokens, button/input/modal primitives, Storybook or live /ui components page, UX writing standards, accessibility pass)
+- Help center / user manual (in-app docs at /help, sidebar nav per feature, "?" links from each panel, articles for every feature shipped to date)
+- Auth0 connector + AI Connect's own Auth0 management UI (user list, role assignment, Auth0 tenant config visible in AI Connect)
+- Stripe connector + AI Connect's own subscription/billing management UI (use Stripe for AI Connect's own paid tiers when those launch)
+
 ---
 
-*Last updated: 2026-06-20*
+*Last updated: 2026-06-24*
