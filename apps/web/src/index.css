@@ -77,13 +77,13 @@ html, body, #root { margin: 0; min-height: 100vh; }
   display: inline-block;
   width: 0.6rem;
   height: 0.6rem;
-  border-radius: 50%;
+  border-radius: var(--ai-radius-full);
   flex: none;
   background: #6b7280;
 }
 .dot-pending { background: #6b7280; }
 .dot-ok { background: #22c55e; }
-.dot-down { background: #ef4444; }
+.dot-down { background: var(--ai-color-error-bg); }
 
 .devs h2,
 .vision h2 {
@@ -104,7 +104,7 @@ html, body, #root { margin: 0; min-height: 100vh; }
 .links {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.75rem 1.5rem;
+  gap: var(--ai-space-3) var(--ai-space-6);
   justify-content: center;
   font-size: 0.95rem;
   opacity: 0.85;
@@ -130,11 +130,11 @@ html, body, #root { margin: 0; min-height: 100vh; }
 
 .settings-block {
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 0.5rem;
-  padding: 1.25rem 1.5rem;
+  border-radius: var(--ai-radius-lg);
+  padding: var(--ai-space-5) var(--ai-space-6);
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: var(--ai-space-6);
 }
 .settings-block h2 {
   font-size: 1.1rem;
@@ -143,14 +143,14 @@ html, body, #root { margin: 0; min-height: 100vh; }
 }
 .settings-block h3 {
   font-size: 0.95rem;
-  margin: 0 0 0.5rem;
+  margin: 0 0 var(--ai-space-2);
   letter-spacing: -0.01em;
   opacity: 0.85;
 }
 .settings-subsection {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--ai-space-2);
 }
 .settings-block .muted {
   opacity: 0.6;
@@ -1106,9 +1106,9 @@ html, body, #root { margin: 0; min-height: 100vh; }
 .wp-module-form {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--ai-space-2);
   border-top: 1px solid rgba(255, 255, 255, 0.08);
-  padding-top: 0.75rem;
+  padding-top: var(--ai-space-3);
 }
 .wp-module-form h5 {
   margin: 0;

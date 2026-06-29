@@ -3,6 +3,11 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App.js";
 import "./index.css";
+import { injectTokens } from "./ui/tokens.js";
+
+// Inject design tokens as --ai-* CSS custom properties at the document root
+// before any component renders, so token-driven styles resolve on first paint.
+injectTokens();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
