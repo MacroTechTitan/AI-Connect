@@ -34,6 +34,13 @@ const envSchema = z.object({
 
   // Admin seed — written by lib/seed.ts on boot.
   ADMIN_EMAIL: z.string().email().default("jgelet@macrotechtitan.com"),
+
+  // Sprint 7 — local vs cloud mode detection (lib/mode.ts). Either var flips
+  // AI Connect into "local mode", enabling local-only integrations like
+  // OpenClaw (which spawns maximus-bridge as a child process). Both unset =
+  // cloud mode (the Render default), which refuses local-only operations.
+  AICONNECT_LOCAL_MODE: z.string().optional(),
+  OPENCLAW_BIN: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

@@ -1,4 +1,9 @@
-export type IntegrationType = "sendgrid" | "openai" | "anthropic" | "wordpress";
+export type IntegrationType =
+  | "sendgrid"
+  | "openai"
+  | "anthropic"
+  | "wordpress"
+  | "openclaw";
 
 export type IntegrationStatus = "pending" | "validated" | "failed";
 
@@ -16,11 +21,27 @@ export type WordPressModule = {
   source_url: string;
   required_memberpress_tier: string | null;
 };
+export type OpenClawConfig = {
+  /** Absolute path to maximus-bridge/index.mjs */
+  bridge_path: string;
+  /** Default agent to use when not specified per-call */
+  default_agent: string;
+};
 export type IntegrationConfig =
   | SendGridConfig
   | OpenAiConfig
   | AnthropicConfig
-  | WordPressConfig;
+  | WordPressConfig
+  | OpenClawConfig;
+
+/** Identity returned by the OpenClaw validator on success. Shaped to satisfy
+ * IntegrationValidationResult.identity (Record<string, unknown>). */
+export type OpenClawIdentity = {
+  default_agent: string;
+  agent_count: number;
+  openclaw_version?: string;
+  bridge_version?: string;
+};
 
 export type IntegrationValidationResult = {
   valid: boolean;
@@ -39,6 +60,7 @@ export function isIntegrationType(value: unknown): value is IntegrationType {
     value === "sendgrid" ||
     value === "openai" ||
     value === "anthropic" ||
-    value === "wordpress"
+    value === "wordpress" ||
+    value === "openclaw"
   );
 }

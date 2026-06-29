@@ -8,10 +8,13 @@ import {
   type FormEvent,
 } from "react";
 
+import { OpenClawAgentManager } from "./components/OpenClawAgentManager";
+import { OpenClawWizard } from "./components/OpenClawWizard";
 import { SessionExpiredNotice } from "./components/SessionExpiredNotice";
 import { WordPressModuleManager } from "./components/WordPressModuleManager";
 import { WordPressWizard } from "./components/WordPressWizard";
 import {
+  API_BASE,
   authedFetch,
   isSessionExpired,
   type GetAccessToken,
@@ -634,13 +637,19 @@ function KeysPanel({
   );
 }
 
-type IntegrationType = "sendgrid" | "openai" | "anthropic" | "wordpress";
+type IntegrationType =
+  | "sendgrid"
+  | "openai"
+  | "anthropic"
+  | "wordpress"
+  | "openclaw";
 
 const INTEGRATION_LABEL: Record<IntegrationType, string> = {
   sendgrid: "SendGrid",
   openai: "OpenAI",
   anthropic: "Anthropic",
   wordpress: "WordPress",
+  openclaw: "OpenClaw",
 };
 
 interface Integration {
@@ -694,6 +703,13 @@ function describeIntegrationIdentity(
         typeof c.config.site_url === "string" ? c.config.site_url : null;
       return url ? `Site: ${url}` : null;
     }
+    case "openclaw": {
+      const agent =
+        typeof c.config.default_agent === "string"
+          ? c.config.default_agent
+          : null;
+      return agent ? `Default agent: ${agent}` : null;
+    }
   }
 }
 
@@ -729,6 +745,41 @@ function IntegrationsPanel({
     integrationId: string;
     siteUrl: string;
   } | null>(null);
+
+  // OpenClaw also uses a guided wizard. It's local-only: the OpenClaw option is
+  // disabled when the API reports cloud mode. null = not yet known.
+  const [openclawWizardOpen, setOpenclawWizardOpen] = useState(false);
+  const [localMode, setLocalMode] = useState<boolean | null>(null);
+  // Inline agent manager (opened from a row or from the wizard's final step).
+  // Only the id is required to call the API; bridge_path/default_agent are for
+  // display + initial selection and may be absent (wizard path).
+  const [agentManager, setAgentManager] = useState<{
+    integrationId: string;
+    bridgePath?: string;
+    defaultAgent?: string;
+  } | null>(null);
+  // Light-touch "Test Connection" result per integration id.
+  const [testStatus, setTestStatus] = useState<
+    Record<string, { ok: boolean; msg: string }>
+  >({});
+
+  // /health is auth-free and DB-free; read local_mode from the same API the
+  // rest of the panel talks to (API_BASE), not the hardcoded prod health URL.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/health`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error("no"))))
+      .then((body: { local_mode?: boolean }) => {
+        if (!cancelled) setLocalMode(Boolean(body.local_mode));
+      })
+      .catch(() => {
+        // Assume cloud mode if we can't tell — fail safe toward "disabled".
+        if (!cancelled) setLocalMode(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
     setListError(null);
@@ -970,6 +1021,51 @@ function IntegrationsPanel({
     }
   }
 
+  // Light-touch revalidation for OpenClaw: GET /agents and surface ok/fail
+  // inline on the row (no toast system in this app). Result clears on next run.
+  async function handleTestConnection(c: Integration) {
+    setTestStatus((prev) => {
+      const next = { ...prev };
+      delete next[c.id];
+      return next;
+    });
+    try {
+      const res = await authedFetch(
+        `/api/integrations/${c.id}/agents`,
+        {},
+        getAccessTokenSilently,
+      );
+      if (res.ok) {
+        const body = (await res.json().catch(() => ({}))) as {
+          agents?: unknown[];
+        };
+        const count = Array.isArray(body.agents) ? body.agents.length : 0;
+        setTestStatus((prev) => ({
+          ...prev,
+          [c.id]: { ok: true, msg: `Connected — ${count} agent(s) reachable.` },
+        }));
+        return;
+      }
+      let msg = "Connection failed.";
+      try {
+        const body = (await res.json()) as { message?: string; error?: string };
+        msg = body.message ?? body.error ?? msg;
+      } catch {
+        // keep default
+      }
+      setTestStatus((prev) => ({ ...prev, [c.id]: { ok: false, msg } }));
+    } catch (err) {
+      if (isSessionExpired(err)) {
+        setSessionExpired(true);
+        return;
+      }
+      setTestStatus((prev) => ({
+        ...prev,
+        [c.id]: { ok: false, msg: "Couldn't reach the server. Try again." },
+      }));
+    }
+  }
+
   if (sessionExpired) {
     return (
       <div className="settings-subsection">
@@ -1014,12 +1110,25 @@ function IntegrationsPanel({
                     {c.status === "failed" ? (
                       <span className="badge-error">failed</span>
                     ) : null}
+                    {c.integration_type === "openclaw" &&
+                    localMode === false ? (
+                      <span className="badge-local-only">
+                        Local mode only
+                      </span>
+                    ) : null}
                   </div>
                   <div className="integration-meta">
                     Last validated: {formatRelativeTime(c.last_validated_at)}
                   </div>
                   {c.validation_error ? (
                     <div className="error">{c.validation_error}</div>
+                  ) : null}
+                  {testStatus[c.id] ? (
+                    <div
+                      className={testStatus[c.id]!.ok ? "muted" : "error"}
+                    >
+                      {testStatus[c.id]!.msg}
+                    </div>
                   ) : null}
                 </div>
                 <div className="integration-actions">
@@ -1045,6 +1154,48 @@ function IntegrationsPanel({
                     >
                       Manage Modules
                     </button>
+                  ) : null}
+                  {c.integration_type === "openclaw" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        disabled={localMode === false}
+                        title={
+                          localMode === false
+                            ? "OpenClaw integrations require AI Connect running locally. See LOCAL_MODE.md."
+                            : undefined
+                        }
+                        onClick={() =>
+                          setAgentManager({
+                            integrationId: c.id,
+                            bridgePath:
+                              typeof c.config.bridge_path === "string"
+                                ? c.config.bridge_path
+                                : undefined,
+                            defaultAgent:
+                              typeof c.config.default_agent === "string"
+                                ? c.config.default_agent
+                                : undefined,
+                          })
+                        }
+                      >
+                        Manage Agents
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        disabled={localMode === false}
+                        title={
+                          localMode === false
+                            ? "OpenClaw integrations require AI Connect running locally. See LOCAL_MODE.md."
+                            : undefined
+                        }
+                        onClick={() => void handleTestConnection(c)}
+                      >
+                        Test Connection
+                      </button>
+                    </>
                   ) : null}
                   <button
                     type="button"
@@ -1076,6 +1227,17 @@ function IntegrationsPanel({
             <option value="openai">OpenAI</option>
             <option value="anthropic">Anthropic</option>
             <option value="wordpress">WordPress</option>
+            <option
+              value="openclaw"
+              disabled={localMode === false}
+              title={
+                localMode === false
+                  ? "OpenClaw integrations require AI Connect running locally. See LOCAL_MODE.md."
+                  : undefined
+              }
+            >
+              OpenClaw{localMode === false ? " (local only)" : ""}
+            </option>
           </select>
         </div>
 
@@ -1125,6 +1287,21 @@ function IntegrationsPanel({
               Connect WordPress Site
             </button>
           </>
+        ) : addType === "openclaw" ? (
+          <>
+            <p className="muted">
+              Connecting OpenClaw lets AI Connect talk to a local agent through
+              the maximus-bridge. The wizard walks you through it — local mode
+              only.
+            </p>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => setOpenclawWizardOpen(true)}
+            >
+              Connect OpenClaw
+            </button>
+          </>
         ) : (
           <button
             type="submit"
@@ -1146,6 +1323,32 @@ function IntegrationsPanel({
             setWizardOpen(false);
             setModuleManager({ integrationId, siteUrl });
           }}
+        />
+      ) : null}
+
+      {openclawWizardOpen ? (
+        <OpenClawWizard
+          getAccessTokenSilently={getAccessTokenSilently}
+          onClose={() => setOpenclawWizardOpen(false)}
+          onConnected={() => void refresh()}
+          onManageAgents={(integrationId) => {
+            // Close the wizard and open the agent manager on the just-created
+            // integration. The manager only needs the id to call the API; it
+            // fetches agents and picks the default itself.
+            setOpenclawWizardOpen(false);
+            setAgentManager({ integrationId });
+            void refresh();
+          }}
+        />
+      ) : null}
+
+      {agentManager ? (
+        <OpenClawAgentManager
+          getAccessTokenSilently={getAccessTokenSilently}
+          integrationId={agentManager.integrationId}
+          bridgePath={agentManager.bridgePath}
+          defaultAgent={agentManager.defaultAgent}
+          onClose={() => setAgentManager(null)}
         />
       ) : null}
 

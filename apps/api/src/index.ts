@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import { env } from "./lib/env.js";
 import { logger } from "./lib/logger.js";
+import { isLocalMode } from "./lib/mode.js";
 import { seedAdmin } from "./lib/seed.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerIntegrationsRoutes } from "./routes/integrations.js";
@@ -46,6 +47,9 @@ app.get("/health", (_req, res) => {
     status: "ok",
     service: "ai-connect-api",
     version: process.env.npm_package_version ?? "0.0.0",
+    // local_mode lets the frontend gate local-only integrations (OpenClaw)
+    // without an authed round trip. Pure env read — keeps /health DB-free.
+    local_mode: isLocalMode(),
     timestamp: new Date().toISOString(),
   });
 });

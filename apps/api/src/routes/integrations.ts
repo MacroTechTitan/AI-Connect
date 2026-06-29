@@ -5,11 +5,17 @@ import { getDb } from "../db/client.js";
 import { integrations } from "../db/schema.js";
 import { getIntegrationValidator } from "../lib/integrations/index.js";
 import {
+  openclawClient,
+  OpenClawError,
+} from "../lib/integrations/openclawClient.js";
+import {
   isIntegrationType,
   type IntegrationConfig,
   type IntegrationType,
+  type OpenClawConfig,
   type WordPressConfig,
 } from "../lib/integrations/types.js";
+import { isLocalMode, LOCAL_ONLY_ERROR } from "../lib/mode.js";
 import {
   WordPressClientError,
   wordpressClient,
@@ -640,6 +646,226 @@ async function handleDeleteModule(req: Request, res: Response): Promise<void> {
   }
 }
 
+// ── OpenClaw agent access ───────────────────────────────────────────────────
+// These routes expose the OpenClawClient to the UI: list the agents the bridge
+// can reach, and send a message to one. Both require a validated openclaw
+// integration and both refuse in cloud mode (AI Connect on Render cannot spawn
+// the local bridge). See lib/mode.ts and docs/LOCAL_MODE.md.
+
+interface OpenClawTarget {
+  integrationId: string;
+  config: OpenClawConfig;
+}
+
+// Resolves the openclaw integration for req.params.id (org- + user-scoped) and
+// returns its config. Writes the error response and returns null on any failure
+// (bad id / not found / wrong type / not validated). Mirrors
+// resolveWordPressTarget.
+async function resolveOpenClawTarget(
+  req: Request,
+  res: Response,
+): Promise<OpenClawTarget | null> {
+  const ctx = getCtx(req);
+  const integrationId = req.params.id;
+  if (typeof integrationId !== "string" || !UUID_RE.test(integrationId)) {
+    res.status(404).json({
+      error: "integration_not_found",
+      message: "Integration not found or does not belong to this user.",
+    });
+    return null;
+  }
+
+  const [row] = await getDb()
+    .select({
+      id: integrations.id,
+      integrationType: integrations.integrationType,
+      config: integrations.config,
+      status: integrations.status,
+    })
+    .from(integrations)
+    .where(
+      and(
+        orgScopeFilter(integrations, ctx),
+        eq(integrations.id, integrationId),
+        eq(integrations.userId, ctx.userId),
+      ),
+    )
+    .limit(1);
+
+  if (!row) {
+    res.status(404).json({
+      error: "integration_not_found",
+      message: "Integration not found or does not belong to this user.",
+    });
+    return null;
+  }
+  if (row.integrationType !== "openclaw") {
+    res.status(400).json({
+      error: "wrong_integration_type",
+      message: `Integration is type '${row.integrationType}', expected 'openclaw'.`,
+    });
+    return null;
+  }
+  if (row.status !== "validated") {
+    res.status(400).json({
+      error: "integration_not_validated",
+      message: `Integration has status '${row.status}'. Run validation first.`,
+    });
+    return null;
+  }
+
+  return { integrationId: row.id, config: row.config as OpenClawConfig };
+}
+
+// Maps an OpenClawError to an HTTP status. Bridge unreachable / bad response is
+// an upstream failure (502); a timeout is a gateway timeout (504); a missing
+// agent is a 404. Anything non-OpenClawError is rethrown for the global handler.
+function handleOpenClawError(err: unknown, res: Response): void {
+  if (err instanceof OpenClawError) {
+    let status = 502;
+    if (err.code === "agent_not_found") status = 404;
+    if (err.code === "bridge_timeout") status = 504;
+    res.status(status).json({ error: err.code, message: err.message });
+    return;
+  }
+  throw err;
+}
+
+async function handleListOpenClawAgents(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  // Cloud mode refusal — never attempt to spawn the bridge on Render.
+  if (!isLocalMode()) {
+    res.status(LOCAL_ONLY_ERROR.status).json({
+      error: LOCAL_ONLY_ERROR.code,
+      message: LOCAL_ONLY_ERROR.message,
+    });
+    return;
+  }
+
+  const target = await resolveOpenClawTarget(req, res);
+  if (!target) return;
+
+  try {
+    const agents = await openclawClient.listAgents(target.config.bridge_path);
+    res.status(200).json({ agents });
+  } catch (err) {
+    handleOpenClawError(err, res);
+  }
+}
+
+async function handleSendOpenClawMessage(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  // Cloud mode refusal — never attempt to spawn the bridge on Render.
+  if (!isLocalMode()) {
+    res.status(LOCAL_ONLY_ERROR.status).json({
+      error: LOCAL_ONLY_ERROR.code,
+      message: LOCAL_ONLY_ERROR.message,
+    });
+    return;
+  }
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+
+  const message = body.message;
+  if (typeof message !== "string" || message.length === 0) {
+    res.status(400).json({
+      error: "message_required",
+      message: 'Request body must include a non-empty "message" string.',
+    });
+    return;
+  }
+  if (message.length > 10_000) {
+    res.status(400).json({
+      error: "message_too_long",
+      message: "Message exceeds 10,000 character limit.",
+    });
+    return;
+  }
+
+  const agentNameRaw = body.agent_name;
+  if (agentNameRaw !== undefined && typeof agentNameRaw !== "string") {
+    res.status(400).json({
+      error: "invalid_agent_name",
+      message: "agent_name must be a string when provided.",
+    });
+    return;
+  }
+
+  const target = await resolveOpenClawTarget(req, res);
+  if (!target) return;
+
+  const ctx = getCtx(req);
+  const targetAgent =
+    agentNameRaw && agentNameRaw.length > 0
+      ? agentNameRaw
+      : target.config.default_agent;
+
+  try {
+    const reply = await openclawClient.sendMessage(
+      target.config.bridge_path,
+      targetAgent,
+      message,
+    );
+
+    // Audit the send. Log lengths, not contents — user instructions to an agent
+    // are sensitive and must not land in the audit log.
+    await logUserAction(
+      ctx.userId,
+      "openclaw_message_sent",
+      "integration",
+      target.integrationId,
+      ctx.organizationId,
+      {
+        agent_name: targetAgent,
+        message_length: message.length,
+        reply_length: reply.reply.length,
+      },
+    );
+
+    res.status(200).json(reply);
+  } catch (err) {
+    handleOpenClawError(err, res);
+  }
+}
+
+// Pre-creation agent discovery. The wizard calls this with a bare bridge_path
+// (no integration row yet) so the user can pick a default agent before the
+// integration is created. Unlike the /:id routes there's no DB row to scope —
+// the gate is local mode + auth. Refused in cloud mode like the others.
+async function handleOpenClawDiscover(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  if (!isLocalMode()) {
+    res.status(LOCAL_ONLY_ERROR.status).json({
+      error: LOCAL_ONLY_ERROR.code,
+      message: LOCAL_ONLY_ERROR.message,
+    });
+    return;
+  }
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const bridgePath = body.bridge_path;
+  if (typeof bridgePath !== "string" || bridgePath.length === 0) {
+    res.status(400).json({
+      error: "bridge_path_required",
+      message: "bridge_path is required.",
+    });
+    return;
+  }
+
+  try {
+    const agents = await openclawClient.listAgents(bridgePath);
+    res.status(200).json({ agents });
+  } catch (err) {
+    handleOpenClawError(err, res);
+  }
+}
+
 export function registerIntegrationsRoutes(app: Express): void {
   app.post(
     "/api/integrations",
@@ -696,5 +922,28 @@ export function registerIntegrationsRoutes(app: Express): void {
     requireAuth,
     requireHydratedUser,
     handleDeleteModule,
+  );
+
+  // OpenClaw agent access — proxies to the local maximus-bridge. All refuse
+  // in cloud mode (503 openclaw_local_only). The literal /openclaw/discover
+  // path is registered before the parameterized /:id routes so Express never
+  // mistakes "openclaw" for an :id.
+  app.post(
+    "/api/integrations/openclaw/discover",
+    requireAuth,
+    requireHydratedUser,
+    handleOpenClawDiscover,
+  );
+  app.get(
+    "/api/integrations/:id/agents",
+    requireAuth,
+    requireHydratedUser,
+    handleListOpenClawAgents,
+  );
+  app.post(
+    "/api/integrations/:id/messages",
+    requireAuth,
+    requireHydratedUser,
+    handleSendOpenClawMessage,
   );
 }
