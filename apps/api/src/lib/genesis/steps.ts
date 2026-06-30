@@ -16,6 +16,7 @@ import {
   type RenderEnvVar,
 } from "../platforms/index.js";
 import * as vault from "../vault.js";
+import { wireAuth0ForProject } from "./auth0Wiring.js";
 import {
   TEMPLATE_REPOS,
   type GenesisContext,
@@ -646,11 +647,44 @@ export async function verifyDeployment(
   };
 }
 
+// --- step h: best-effort Auth0 wiring --------------------------------------
+
+// Sprint 8: if the project creator has an active Auth0 integration (validated +
+// include_in_projects), create an Auth0 application for this project, point its
+// callbacks at the Render URL, and merge AUTH0_* into the Render env vars.
+//
+// BEST-EFFORT by design: this step ALWAYS returns "succeeded" so that an Auth0
+// wiring failure (or a plain "no Auth0 integration" skip) never trips the
+// orchestrator's rollback of the already-provisioned project. The real outcome —
+// success, skip, or failure — rides in details.auth0_wiring for the SSE stream /
+// UI to surface. rollbackable: false; the Auth0 app (if created) is intentionally
+// left in place for the user to reuse or clean up.
+export async function wireAuth0(
+  ctx: GenesisContext,
+): Promise<GenesisStepResult> {
+  const result = await wireAuth0ForProject({
+    userId: ctx.userId,
+    projectId: ctx.projectId,
+    projectName: ctx.name,
+    projectSlug: ctx.slug,
+    renderServiceId: ctx.results.create_render_service?.resourceId,
+    renderCredential: ctx.credentials.render,
+    deployedUrl: ctx.deployedUrl,
+  });
+
+  return {
+    status: "succeeded",
+    rollbackable: false,
+    details: { auth0_wiring: result },
+  };
+}
+
 // --- the ordered step list the orchestrator walks --------------------------
 
 // Execution order: GitHub first (Vercel + Render both depend on the repo);
 // Supabase kicked off early because it provisions slowly; Vercel + Render next;
-// the two no-ops; verification last.
+// the two no-ops; verification; then best-effort Auth0 wiring (last, so a wiring
+// failure never affects the core provisioning result).
 export const GENESIS_STEPS: GenesisStep[] = [
   { name: "create_github_repo", run: createGithubRepo },
   { name: "create_supabase_project", run: createSupabaseProject },
@@ -659,4 +693,5 @@ export const GENESIS_STEPS: GenesisStep[] = [
   { name: "wire_github_to_render", run: wireGithubToRender },
   { name: "inject_env_vars", run: injectEnvVars },
   { name: "verify_deployment", run: verifyDeployment },
+  { name: "wire_auth0", run: wireAuth0 },
 ];
