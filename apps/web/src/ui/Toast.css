@@ -1,0 +1,95 @@
+.ai-toast-container {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: var(--ai-z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-2);
+  font-family: var(--ai-font-sans);
+  pointer-events: none;
+}
+.ai-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ai-space-2);
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  padding: var(--ai-space-3) var(--ai-space-4);
+  border-radius: var(--ai-radius-md);
+  box-shadow: var(--ai-shadow-lg);
+  background: var(--ai-color-neutral-0);
+  color: var(--ai-color-neutral-900);
+  border-left: 4px solid var(--ai-color-neutral-400);
+  animation: ai-toast-in var(--ai-time-normal) var(--ai-ease-easeOut);
+}
+.ai-toast--success {
+  border-left-color: var(--ai-color-success-bg);
+}
+.ai-toast--error {
+  border-left-color: var(--ai-color-error-bg);
+}
+.ai-toast--info {
+  border-left-color: var(--ai-color-info-bg);
+}
+.ai-toast--warning {
+  border-left-color: var(--ai-color-warning-bg);
+}
+.ai-toast__body {
+  flex: 1;
+  min-width: 0;
+}
+.ai-toast__title {
+  font-size: var(--ai-text-base);
+  font-weight: var(--ai-weight-semibold);
+}
+.ai-toast__desc {
+  font-size: var(--ai-text-sm);
+  opacity: 0.8;
+  word-break: break-word;
+}
+.ai-toast__action {
+  border: none;
+  background: transparent;
+  color: var(--ai-color-primary-600);
+  font: inherit;
+  font-size: var(--ai-text-sm);
+  font-weight: var(--ai-weight-medium);
+  cursor: pointer;
+  padding: 0;
+}
+.ai-toast__close {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: var(--ai-text-lg);
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.5;
+  padding: 0 var(--ai-space-1);
+}
+.ai-toast__close:hover {
+  opacity: 1;
+}
+
+@keyframes ai-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .ai-toast {
+    background: var(--ai-color-neutral-800);
+    color: var(--ai-color-neutral-100);
+  }
+  .ai-toast__action {
+    color: var(--ai-color-primary-400);
+  }
+}

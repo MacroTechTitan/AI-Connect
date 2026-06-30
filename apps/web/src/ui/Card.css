@@ -1,0 +1,80 @@
+.ai-card {
+  border-radius: var(--ai-radius-lg);
+  font-family: var(--ai-font-sans);
+  color: inherit;
+  transition:
+    box-shadow var(--ai-time-fast) var(--ai-ease-easeOut),
+    transform var(--ai-time-fast) var(--ai-ease-easeOut);
+}
+
+/* Variants */
+.ai-card--default {
+  background: var(--ai-color-neutral-50);
+  border: 1px solid var(--ai-color-neutral-200);
+}
+.ai-card--elevated {
+  background: var(--ai-color-neutral-0);
+  border: 1px solid transparent;
+  box-shadow: var(--ai-shadow-md);
+}
+.ai-card--outlined {
+  background: transparent;
+  border: 1px solid var(--ai-color-neutral-300);
+}
+
+/* Padding applies to header/body/footer */
+.ai-card--pad-none .ai-card__header,
+.ai-card--pad-none .ai-card__body,
+.ai-card--pad-none .ai-card__footer {
+  padding: 0;
+}
+.ai-card--pad-sm .ai-card__header,
+.ai-card--pad-sm .ai-card__body,
+.ai-card--pad-sm .ai-card__footer {
+  padding: var(--ai-space-3);
+}
+.ai-card--pad-md .ai-card__header,
+.ai-card--pad-md .ai-card__body,
+.ai-card--pad-md .ai-card__footer {
+  padding: var(--ai-space-4);
+}
+.ai-card--pad-lg .ai-card__header,
+.ai-card--pad-lg .ai-card__body,
+.ai-card--pad-lg .ai-card__footer {
+  padding: var(--ai-space-6);
+}
+
+.ai-card__header {
+  border-bottom: 1px solid var(--ai-color-neutral-200);
+  font-weight: var(--ai-weight-semibold);
+}
+.ai-card__footer {
+  border-top: 1px solid var(--ai-color-neutral-200);
+}
+
+.ai-card--interactive {
+  cursor: pointer;
+}
+.ai-card--interactive:hover {
+  box-shadow: var(--ai-shadow-lg);
+  transform: translateY(-1px);
+}
+
+@media (prefers-color-scheme: dark) {
+  .ai-card--default {
+    background: var(--ai-color-neutral-800);
+    border-color: var(--ai-color-neutral-700);
+  }
+  .ai-card--elevated {
+    background: var(--ai-color-neutral-800);
+  }
+  .ai-card--outlined {
+    border-color: var(--ai-color-neutral-700);
+  }
+  .ai-card__header {
+    border-bottom-color: var(--ai-color-neutral-700);
+  }
+  .ai-card__footer {
+    border-top-color: var(--ai-color-neutral-700);
+  }
+}

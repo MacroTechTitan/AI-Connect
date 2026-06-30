@@ -1,0 +1,107 @@
+.ai-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ai-space-2);
+  font-family: var(--ai-font-sans);
+  font-weight: var(--ai-weight-medium);
+  line-height: 1;
+  border: 1px solid transparent;
+  border-radius: var(--ai-radius-soft);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--ai-time-fast) var(--ai-ease-easeOut),
+    border-color var(--ai-time-fast) var(--ai-ease-easeOut),
+    color var(--ai-time-fast) var(--ai-ease-easeOut),
+    opacity var(--ai-time-fast) var(--ai-ease-easeOut);
+}
+.ai-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Sizes */
+.ai-btn--sm {
+  height: 28px;
+  padding: 0 var(--ai-space-3);
+  font-size: var(--ai-text-sm);
+}
+.ai-btn--md {
+  height: 36px;
+  padding: 0 var(--ai-space-4);
+  font-size: var(--ai-text-base);
+}
+.ai-btn--lg {
+  height: 44px;
+  padding: 0 var(--ai-space-5);
+  font-size: var(--ai-text-md);
+}
+.ai-btn--full {
+  width: 100%;
+}
+
+/* Variants */
+.ai-btn--primary {
+  background: var(--ai-color-primary-500);
+  color: var(--ai-color-neutral-0);
+}
+.ai-btn--primary:not(:disabled):hover {
+  background: var(--ai-color-primary-600);
+}
+.ai-btn--secondary {
+  background: var(--ai-color-neutral-200);
+  color: var(--ai-color-neutral-800);
+}
+.ai-btn--secondary:not(:disabled):hover {
+  background: var(--ai-color-neutral-300);
+}
+.ai-btn--ghost {
+  background: transparent;
+  color: var(--ai-color-primary-500);
+}
+.ai-btn--ghost:not(:disabled):hover {
+  background: var(--ai-color-primary-50);
+}
+.ai-btn--danger {
+  background: var(--ai-color-error-bg);
+  color: var(--ai-color-neutral-0);
+}
+.ai-btn--danger:not(:disabled):hover {
+  filter: brightness(0.94);
+}
+
+/* Loading */
+.ai-btn--loading .ai-btn__label {
+  opacity: 0.6;
+}
+.ai-btn__icon {
+  display: inline-flex;
+  align-items: center;
+}
+.ai-btn__spinner {
+  width: 1em;
+  height: 1em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: var(--ai-radius-full);
+  animation: ai-btn-spin var(--ai-time-slower) linear infinite;
+}
+@keyframes ai-btn-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .ai-btn--secondary {
+    background: var(--ai-color-neutral-700);
+    color: var(--ai-color-neutral-100);
+  }
+  .ai-btn--secondary:not(:disabled):hover {
+    background: var(--ai-color-neutral-600);
+  }
+  .ai-btn--ghost:not(:disabled):hover {
+    background: rgba(59, 130, 246, 0.16);
+  }
+}
