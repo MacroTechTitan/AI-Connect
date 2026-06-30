@@ -1,6 +1,12 @@
+import "./WordPressWizard.css";
 import { useState } from "react";
 
 import { authedFetch, isSessionExpired, type GetAccessToken } from "../lib/api";
+import { Badge } from "../ui/Badge";
+import { Button } from "../ui/Button";
+import { Input } from "../ui/Input";
+import { Modal } from "../ui/Modal";
+import { Wizard, type WizardStep } from "../ui/Wizard";
 import { SessionExpiredNotice } from "./SessionExpiredNotice";
 
 interface ConnectedIntegration {
@@ -9,9 +15,39 @@ interface ConnectedIntegration {
   pluginVersion: string;
 }
 
+type StepId = "welcome" | "download" | "install" | "token" | "connect" | "success";
+
+const STEPS: WizardStep[] = [
+  { id: "welcome", title: "Welcome" },
+  { id: "download", title: "Download Plugin" },
+  { id: "install", title: "Install" },
+  { id: "token", title: "Get Token" },
+  { id: "connect", title: "Connect" },
+  { id: "success", title: "Success" },
+];
+
+// Per-step footer label for the default Wizard footer (steps 1-4). Preserves
+// the original wizard's button copy.
+const NEXT_LABEL: Record<StepId, string> = {
+  welcome: "Get Started",
+  download: "Next: Install on WordPress",
+  install: "I've installed the plugin",
+  token: "I have my token",
+  connect: "",
+  success: "",
+};
+
+// Steps 5 and 6 render their own primary actions inside the content, so the
+// Wizard footer is hidden for them.
+const CUSTOM_ACTION_STEPS = new Set<StepId>(["connect", "success"]);
+
 // Six-step guided flow for a first WordPress connection. The goal is minimum
 // manual work: one-click download, on-screen install steps, paste two strings,
 // done. Module management afterward never returns to WP admin.
+//
+// Sprint 8 Commit 4: refactored onto the design-system primitives (Modal,
+// Wizard, Button, Input, Badge). Copy, validation, and API calls are
+// unchanged from the Sprint 6 version.
 export function WordPressWizard({
   getAccessTokenSilently,
   onClose,
@@ -24,15 +60,15 @@ export function WordPressWizard({
   onConnected: () => void;
   onManageModules: (integrationId: string, siteUrl: string) => void;
 }) {
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState<StepId>("welcome");
   const [sessionExpired, setSessionExpired] = useState(false);
 
-  // Step 2 — download
+  // Step "download"
   const [downloading, setDownloading] = useState(false);
   const [downloaded, setDownloaded] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
-  // Step 5 — connect
+  // Step "connect"
   const [siteUrl, setSiteUrl] = useState("");
   const [token, setToken] = useState("");
   const [testing, setTesting] = useState(false);
@@ -139,7 +175,7 @@ export function WordPressWizard({
       };
       setConnected(result);
       onConnected();
-      setStep(6);
+      setStep("success");
     } catch (err) {
       if (isSessionExpired(err)) {
         setSessionExpired(true);
@@ -151,221 +187,151 @@ export function WordPressWizard({
     }
   }
 
+  // The "download" step gates Continue until the plugin has been downloaded;
+  // every other footer step can always advance.
+  const canGoNext = step === "download" ? downloaded : true;
+
   return (
-    <div
-      className="wp-wizard-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Connect a WordPress Site"
-    >
-      <div className="wp-wizard">
-        <div className="wp-wizard-head">
-          <span className="wp-wizard-progress">Step {step} of 6</span>
-          <button type="button" className="linklike" onClick={onClose}>
-            Cancel
-          </button>
-        </div>
-
-        {sessionExpired ? <SessionExpiredNotice /> : null}
-
-        {!sessionExpired && step === 1 ? (
-          <div className="wp-wizard-step">
-            <h3>Connect a WordPress Site</h3>
-            <p>
-              This wizard guides you through installing the AI Connect plugin on
-              your WordPress site. The whole process takes about 2 minutes.
-            </p>
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={() => setStep(2)}
-            >
-              Get Started
-            </button>
-          </div>
-        ) : null}
-
-        {!sessionExpired && step === 2 ? (
-          <div className="wp-wizard-step">
-            <h3>Download the AI Connect Plugin</h3>
-            <p>
-              Download the plugin .zip — you&apos;ll upload it to your WordPress
-              site in the next step.
-            </p>
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={() => void handleDownload()}
-              disabled={downloading}
-            >
-              {downloading
-                ? "Preparing…"
-                : "Download AI Connect Plugin (.zip)"}
-            </button>
-            {downloaded ? (
-              <p className="muted">Downloaded. Continue when ready.</p>
-            ) : null}
-            {downloadError ? <p className="error">{downloadError}</p> : null}
-            <div className="wp-wizard-nav">
-              <button
-                type="button"
-                className="linklike"
-                onClick={() => setStep(1)}
-              >
-                Back
-              </button>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => setStep(3)}
-                disabled={!downloaded}
-              >
-                Next: Install on WordPress
-              </button>
-            </div>
-          </div>
-        ) : null}
-
-        {!sessionExpired && step === 3 ? (
-          <div className="wp-wizard-step">
-            <h3>Install on Your WordPress Site</h3>
-            <ol className="wp-wizard-list">
-              <li>
-                Open your WordPress admin → click <strong>Plugins</strong> →{" "}
-                <strong>Add New</strong> → <strong>Upload Plugin</strong>.
-              </li>
-              <li>
-                Choose the file you just downloaded → click{" "}
-                <strong>Install Now</strong>.
-              </li>
-              <li>
-                After install completes, click <strong>Activate Plugin</strong>.
-              </li>
-            </ol>
-            <div className="wp-wizard-nav">
-              <button
-                type="button"
-                className="linklike"
-                onClick={() => setStep(2)}
-              >
-                Back
-              </button>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => setStep(4)}
-              >
-                I&apos;ve installed the plugin
-              </button>
-            </div>
-          </div>
-        ) : null}
-
-        {!sessionExpired && step === 4 ? (
-          <div className="wp-wizard-step">
-            <h3>Get Your Connection Token</h3>
-            <ol className="wp-wizard-list">
-              <li>
-                In your WordPress admin, go to <strong>Settings → AI Connect</strong>.
-              </li>
-              <li>
-                Click the <strong>Generate New Token</strong> button.
-              </li>
-              <li>Copy the token displayed.</li>
-            </ol>
-            {/^https?:\/\//i.test(siteUrl) ? (
+    <Modal open onClose={onClose} size="md" title="Connect WordPress">
+      {sessionExpired ? (
+        <SessionExpiredNotice />
+      ) : (
+        <Wizard
+          steps={STEPS}
+          currentStepId={step}
+          onStepChange={(id) => setStep(id as StepId)}
+          onCancel={onClose}
+          nextLabel={NEXT_LABEL[step]}
+          canGoNext={canGoNext}
+          hideFooter={CUSTOM_ACTION_STEPS.has(step)}
+        >
+          {step === "welcome" ? (
+            <div className="wpw-step">
               <p>
-                <a href={siteUrl} target="_blank" rel="noreferrer">
-                  Open your WordPress site ↗
-                </a>
+                This wizard guides you through installing the AI Connect plugin
+                on your WordPress site. The whole process takes about 2 minutes.
               </p>
-            ) : null}
-            <div className="wp-wizard-nav">
-              <button
-                type="button"
-                className="linklike"
-                onClick={() => setStep(3)}
-              >
-                Back
-              </button>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => setStep(5)}
-              >
-                I have my token
-              </button>
             </div>
-          </div>
-        ) : null}
+          ) : null}
 
-        {!sessionExpired && step === 5 ? (
-          <div className="wp-wizard-step">
-            <h3>Enter Your Site Details</h3>
-            <label className="wp-wizard-field">
-              WordPress Site URL
-              <input
+          {step === "download" ? (
+            <div className="wpw-step">
+              <p>
+                Download the plugin .zip — you&apos;ll upload it to your
+                WordPress site in the next step.
+              </p>
+              <Button onClick={() => void handleDownload()} disabled={downloading}>
+                {downloading ? "Preparing…" : "Download AI Connect Plugin (.zip)"}
+              </Button>
+              {downloaded ? (
+                <p className="wpw-muted">Downloaded. Continue when ready.</p>
+              ) : null}
+              {downloadError ? <p className="wpw-error">{downloadError}</p> : null}
+            </div>
+          ) : null}
+
+          {step === "install" ? (
+            <div className="wpw-step">
+              <ol className="wpw-list">
+                <li>
+                  Open your WordPress admin → click <strong>Plugins</strong> →{" "}
+                  <strong>Add New</strong> → <strong>Upload Plugin</strong>.
+                </li>
+                <li>
+                  Choose the file you just downloaded → click{" "}
+                  <strong>Install Now</strong>.
+                </li>
+                <li>
+                  After install completes, click <strong>Activate Plugin</strong>.
+                </li>
+              </ol>
+            </div>
+          ) : null}
+
+          {step === "token" ? (
+            <div className="wpw-step">
+              <ol className="wpw-list">
+                <li>
+                  In your WordPress admin, go to{" "}
+                  <strong>Settings → AI Connect</strong>.
+                </li>
+                <li>
+                  Click the <strong>Generate New Token</strong> button.
+                </li>
+                <li>Copy the token displayed.</li>
+              </ol>
+              {/^https?:\/\//i.test(siteUrl) ? (
+                <p>
+                  <a
+                    className="wpw-link"
+                    href={siteUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open your WordPress site ↗
+                  </a>
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {step === "connect" ? (
+            <div className="wpw-step">
+              <Input
+                label="WordPress Site URL"
                 type="text"
                 placeholder="https://yoursite.com"
                 value={siteUrl}
                 onChange={(e) => setSiteUrl(e.target.value)}
               />
-            </label>
-            <label className="wp-wizard-field">
-              Token
-              <input
+              <Input
+                label="Token"
                 type="password"
                 placeholder="Paste the token from WP admin"
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
               />
-            </label>
-            {connectError ? <p className="error">{connectError}</p> : null}
-            <div className="wp-wizard-nav">
-              <button
-                type="button"
-                className="linklike"
-                onClick={() => setStep(4)}
-              >
-                Back
-              </button>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => void handleTestConnection()}
-                disabled={testing}
-              >
-                {testing ? "Testing…" : "Test Connection"}
-              </button>
+              {connectError ? <p className="wpw-error">{connectError}</p> : null}
+              <div className="wpw-actions">
+                <Button
+                  onClick={() => void handleTestConnection()}
+                  disabled={testing}
+                >
+                  {testing ? "Testing…" : "Test Connection"}
+                </Button>
+                <Button variant="ghost" onClick={() => setStep("token")}>
+                  Back
+                </Button>
+                <Button variant="ghost" onClick={onClose}>
+                  Cancel
+                </Button>
+              </div>
             </div>
-          </div>
-        ) : null}
+          ) : null}
 
-        {!sessionExpired && step === 6 && connected ? (
-          <div className="wp-wizard-step">
-            <h3>Connected!</h3>
-            <p>
-              <strong>{connected.siteUrl}</strong>
-              <br />
-              Plugin version: {connected.pluginVersion}
-            </p>
-            <div className="wp-wizard-nav">
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() =>
-                  onManageModules(connected.id, connected.siteUrl)
-                }
-              >
-                Add Your First Module
-              </button>
-              <button type="button" className="linklike" onClick={onClose}>
-                Done — Set Up Modules Later
-              </button>
+          {step === "success" && connected ? (
+            <div className="wpw-step">
+              <div className="wpw-success-meta">
+                <Badge variant="success">Connected</Badge>
+                <strong>{connected.siteUrl}</strong>
+                <span>Plugin version: {connected.pluginVersion}</span>
+              </div>
+              <div className="wpw-actions">
+                <Button
+                  onClick={() =>
+                    onManageModules(connected.id, connected.siteUrl)
+                  }
+                >
+                  Add Your First Module
+                </Button>
+                <Button variant="ghost" onClick={onClose}>
+                  Done — Set Up Modules Later
+                </Button>
+              </div>
             </div>
-          </div>
-        ) : null}
-      </div>
-    </div>
+          ) : null}
+        </Wizard>
+      )}
+    </Modal>
   );
 }

@@ -22,6 +22,14 @@ export type WizardProps = {
   backLabel?: string;
   cancelLabel?: string;
   hideStepIndicator?: boolean;
+  /**
+   * If true, hides the default Back/Continue/Cancel footer. The step content
+   * is expected to render its own primary actions (and drive onStepChange /
+   * onCancel / onComplete itself). Useful for steps where the action is part
+   * of the content (e.g. a "Test Connection" button). The step indicator is
+   * still shown above the content.
+   */
+  hideFooter?: boolean;
 };
 
 export function Wizard({
@@ -37,6 +45,7 @@ export function Wizard({
   backLabel = "Back",
   cancelLabel = "Cancel",
   hideStepIndicator = false,
+  hideFooter = false,
 }: WizardProps) {
   const foundIndex = steps.findIndex((s) => s.id === currentStepId);
   const currentIndex = foundIndex < 0 ? 0 : foundIndex;
@@ -85,25 +94,27 @@ export function Wizard({
 
       <div className="ai-wizard__content">{children}</div>
 
-      <div className="ai-wizard__footer">
-        <div className="ai-wizard__footer-left">
-          {onCancel ? (
-            <Button variant="ghost" onClick={onCancel}>
-              {cancelLabel}
+      {!hideFooter ? (
+        <div className="ai-wizard__footer">
+          <div className="ai-wizard__footer-left">
+            {onCancel ? (
+              <Button variant="ghost" onClick={onCancel}>
+                {cancelLabel}
+              </Button>
+            ) : null}
+          </div>
+          <div className="ai-wizard__footer-right">
+            {canGoBack && !isFirst ? (
+              <Button variant="secondary" onClick={goBack}>
+                {backLabel}
+              </Button>
+            ) : null}
+            <Button variant="primary" onClick={goNext} disabled={!canGoNext}>
+              {isLast ? "Complete" : nextLabel}
             </Button>
-          ) : null}
+          </div>
         </div>
-        <div className="ai-wizard__footer-right">
-          {canGoBack && !isFirst ? (
-            <Button variant="secondary" onClick={goBack}>
-              {backLabel}
-            </Button>
-          ) : null}
-          <Button variant="primary" onClick={goNext} disabled={!canGoNext}>
-            {isLast ? "Complete" : nextLabel}
-          </Button>
-        </div>
-      </div>
+      ) : null}
     </div>
   );
 }
