@@ -1,0 +1,2 @@
+ALTER TABLE "integrations" DROP CONSTRAINT "integrations_integration_type_check";--> statement-breakpoint
+ALTER TABLE "integrations" ADD CONSTRAINT "integrations_integration_type_check" CHECK ("integrations"."integration_type" IN ('sendgrid', 'openai', 'anthropic', 'wordpress', 'openclaw', 'auth0'));
