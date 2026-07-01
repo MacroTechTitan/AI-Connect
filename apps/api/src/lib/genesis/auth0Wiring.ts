@@ -151,7 +151,12 @@ export async function wireAuth0ForProject(params: {
       {
         name: projectName,
         description: `AI Connect-provisioned project (ID: ${projectId})`,
-        app_type: "spa",
+        // AI Connect provisions Node services on Render — server-side apps that
+        // hold AUTH0_CLIENT_SECRET as a confidential env var and use the
+        // authorization code flow with that secret. That's a "regular_web"
+        // (confidential) client, not "spa" (a public client with no meaningful
+        // secret).
+        app_type: "regular_web",
         callbacks: callbackUrls,
         allowed_logout_urls: [base],
         allowed_origins: [base],
