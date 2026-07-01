@@ -8,6 +8,7 @@ import {
   type FormEvent,
 } from "react";
 
+import { Auth0ApplicationManager } from "./components/Auth0ApplicationManager";
 import { Auth0Wizard } from "./components/Auth0Wizard";
 import { OpenClawAgentManager } from "./components/OpenClawAgentManager";
 import { OpenClawWizard } from "./components/OpenClawWizard";
@@ -771,6 +772,14 @@ function IntegrationsPanel({
   const [openclawWizardOpen, setOpenclawWizardOpen] = useState(false);
   // Auth0 uses a guided wizard too (works in cloud mode — no gating).
   const [auth0WizardOpen, setAuth0WizardOpen] = useState(false);
+  // Inline Auth0 application manager (opened from a row or the wizard's final
+  // step). Only the id is required to call the API; domain / default app id are
+  // for display and may be absent (wizard path).
+  const [auth0Manager, setAuth0Manager] = useState<{
+    integrationId: string;
+    domain?: string;
+    defaultApplicationId?: string;
+  } | null>(null);
   const [localMode, setLocalMode] = useState<boolean | null>(null);
   // Inline agent manager (opened from a row or from the wizard's final step).
   // Only the id is required to call the API; bridge_path/default_agent are for
@@ -1043,24 +1052,39 @@ function IntegrationsPanel({
     }
   }
 
-  // Light-touch revalidation for OpenClaw: GET /agents and surface ok/fail
+  // Light-touch revalidation: GET the type's read endpoint and surface ok/fail
   // inline on the row (no toast system in this app). Result clears on next run.
+  // OpenClaw lists agents; Auth0 lists applications.
   async function handleTestConnection(c: Integration) {
     setTestStatus((prev) => {
       const next = { ...prev };
       delete next[c.id];
       return next;
     });
+    const isAuth0 = c.integration_type === "auth0";
+    const path = isAuth0
+      ? `/api/integrations/${c.id}/auth0/applications`
+      : `/api/integrations/${c.id}/agents`;
     try {
-      const res = await authedFetch(
-        `/api/integrations/${c.id}/agents`,
-        {},
-        getAccessTokenSilently,
-      );
+      const res = await authedFetch(path, {}, getAccessTokenSilently);
       if (res.ok) {
         const body = (await res.json().catch(() => ({}))) as {
           agents?: unknown[];
+          applications?: unknown[];
         };
+        if (isAuth0) {
+          const count = Array.isArray(body.applications)
+            ? body.applications.length
+            : 0;
+          setTestStatus((prev) => ({
+            ...prev,
+            [c.id]: {
+              ok: true,
+              msg: `Connected — ${count} application(s) in the tenant.`,
+            },
+          }));
+          return;
+        }
         const count = Array.isArray(body.agents) ? body.agents.length : 0;
         setTestStatus((prev) => ({
           ...prev,
@@ -1213,6 +1237,36 @@ function IntegrationsPanel({
                             ? "OpenClaw integrations require AI Connect running locally. See LOCAL_MODE.md."
                             : undefined
                         }
+                        onClick={() => void handleTestConnection(c)}
+                      >
+                        Test Connection
+                      </button>
+                    </>
+                  ) : null}
+                  {c.integration_type === "auth0" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() =>
+                          setAuth0Manager({
+                            integrationId: c.id,
+                            domain:
+                              typeof c.config.domain === "string"
+                                ? c.config.domain
+                                : undefined,
+                            defaultApplicationId:
+                              typeof c.config.default_application_id === "string"
+                                ? c.config.default_application_id
+                                : undefined,
+                          })
+                        }
+                      >
+                        Manage Applications
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-primary"
                         onClick={() => void handleTestConnection(c)}
                       >
                         Test Connection
@@ -1395,15 +1449,23 @@ function IntegrationsPanel({
           onClose={() => setAuth0WizardOpen(false)}
           onConnected={() => void refresh()}
           onManageApplications={(integrationId) => {
-            // The Auth0 application manager arrives in Sprint 8 Commit 10. Until
-            // then, "View Applications" closes the wizard and refreshes the list.
-            console.warn(
-              "Auth0 application manager not yet wired (Commit 10); integration:",
-              integrationId,
-            );
+            // Close the wizard and open the application manager on the
+            // just-created integration. The manager only needs the id; it
+            // fetches applications itself.
             setAuth0WizardOpen(false);
+            setAuth0Manager({ integrationId });
             void refresh();
           }}
+        />
+      ) : null}
+
+      {auth0Manager ? (
+        <Auth0ApplicationManager
+          getAccessTokenSilently={getAccessTokenSilently}
+          integrationId={auth0Manager.integrationId}
+          domain={auth0Manager.domain}
+          defaultApplicationId={auth0Manager.defaultApplicationId}
+          onClose={() => setAuth0Manager(null)}
         />
       ) : null}
 
