@@ -8,6 +8,8 @@ import {
   type FormEvent,
 } from "react";
 
+import { Auth0ApplicationManager } from "./components/Auth0ApplicationManager";
+import { Auth0Wizard } from "./components/Auth0Wizard";
 import { OpenClawAgentManager } from "./components/OpenClawAgentManager";
 import { OpenClawWizard } from "./components/OpenClawWizard";
 import { SessionExpiredNotice } from "./components/SessionExpiredNotice";
@@ -642,7 +644,8 @@ type IntegrationType =
   | "openai"
   | "anthropic"
   | "wordpress"
-  | "openclaw";
+  | "openclaw"
+  | "auth0";
 
 const INTEGRATION_LABEL: Record<IntegrationType, string> = {
   sendgrid: "SendGrid",
@@ -650,6 +653,7 @@ const INTEGRATION_LABEL: Record<IntegrationType, string> = {
   anthropic: "Anthropic",
   wordpress: "WordPress",
   openclaw: "OpenClaw",
+  auth0: "Auth0",
 };
 
 interface Integration {
@@ -710,6 +714,23 @@ function describeIntegrationIdentity(
           : null;
       return agent ? `Default agent: ${agent}` : null;
     }
+    case "auth0": {
+      // Identity is only returned by POST (the wizard's session), not GET, so
+      // this shows on freshly-added rows; on reload it falls back gracefully.
+      const name =
+        sessionIdentity &&
+        typeof sessionIdentity.default_application_name === "string"
+          ? sessionIdentity.default_application_name
+          : null;
+      if (name) return `Default app: ${name}`;
+      const count =
+        sessionIdentity &&
+        typeof sessionIdentity.application_count === "number"
+          ? sessionIdentity.application_count
+          : null;
+      if (count !== null) return `${count} app${count === 1 ? "" : "s"}`;
+      return "Ready for new projects";
+    }
   }
 }
 
@@ -749,6 +770,16 @@ function IntegrationsPanel({
   // OpenClaw also uses a guided wizard. It's local-only: the OpenClaw option is
   // disabled when the API reports cloud mode. null = not yet known.
   const [openclawWizardOpen, setOpenclawWizardOpen] = useState(false);
+  // Auth0 uses a guided wizard too (works in cloud mode — no gating).
+  const [auth0WizardOpen, setAuth0WizardOpen] = useState(false);
+  // Inline Auth0 application manager (opened from a row or the wizard's final
+  // step). Only the id is required to call the API; domain / default app id are
+  // for display and may be absent (wizard path).
+  const [auth0Manager, setAuth0Manager] = useState<{
+    integrationId: string;
+    domain?: string;
+    defaultApplicationId?: string;
+  } | null>(null);
   const [localMode, setLocalMode] = useState<boolean | null>(null);
   // Inline agent manager (opened from a row or from the wizard's final step).
   // Only the id is required to call the API; bridge_path/default_agent are for
@@ -1021,24 +1052,39 @@ function IntegrationsPanel({
     }
   }
 
-  // Light-touch revalidation for OpenClaw: GET /agents and surface ok/fail
+  // Light-touch revalidation: GET the type's read endpoint and surface ok/fail
   // inline on the row (no toast system in this app). Result clears on next run.
+  // OpenClaw lists agents; Auth0 lists applications.
   async function handleTestConnection(c: Integration) {
     setTestStatus((prev) => {
       const next = { ...prev };
       delete next[c.id];
       return next;
     });
+    const isAuth0 = c.integration_type === "auth0";
+    const path = isAuth0
+      ? `/api/integrations/${c.id}/auth0/applications`
+      : `/api/integrations/${c.id}/agents`;
     try {
-      const res = await authedFetch(
-        `/api/integrations/${c.id}/agents`,
-        {},
-        getAccessTokenSilently,
-      );
+      const res = await authedFetch(path, {}, getAccessTokenSilently);
       if (res.ok) {
         const body = (await res.json().catch(() => ({}))) as {
           agents?: unknown[];
+          applications?: unknown[];
         };
+        if (isAuth0) {
+          const count = Array.isArray(body.applications)
+            ? body.applications.length
+            : 0;
+          setTestStatus((prev) => ({
+            ...prev,
+            [c.id]: {
+              ok: true,
+              msg: `Connected — ${count} application(s) in the tenant.`,
+            },
+          }));
+          return;
+        }
         const count = Array.isArray(body.agents) ? body.agents.length : 0;
         setTestStatus((prev) => ({
           ...prev,
@@ -1197,6 +1243,36 @@ function IntegrationsPanel({
                       </button>
                     </>
                   ) : null}
+                  {c.integration_type === "auth0" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() =>
+                          setAuth0Manager({
+                            integrationId: c.id,
+                            domain:
+                              typeof c.config.domain === "string"
+                                ? c.config.domain
+                                : undefined,
+                            defaultApplicationId:
+                              typeof c.config.default_application_id === "string"
+                                ? c.config.default_application_id
+                                : undefined,
+                          })
+                        }
+                      >
+                        Manage Applications
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => void handleTestConnection(c)}
+                      >
+                        Test Connection
+                      </button>
+                    </>
+                  ) : null}
                   <button
                     type="button"
                     className="btn-danger"
@@ -1227,6 +1303,7 @@ function IntegrationsPanel({
             <option value="openai">OpenAI</option>
             <option value="anthropic">Anthropic</option>
             <option value="wordpress">WordPress</option>
+            <option value="auth0">Auth0</option>
             <option
               value="openclaw"
               disabled={localMode === false}
@@ -1302,6 +1379,20 @@ function IntegrationsPanel({
               Connect OpenClaw
             </button>
           </>
+        ) : addType === "auth0" ? (
+          <>
+            <p className="muted">
+              Connecting Auth0 lets AI Connect wire authentication into projects
+              you provision. The wizard walks you through it.
+            </p>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => setAuth0WizardOpen(true)}
+            >
+              Connect Auth0
+            </button>
+          </>
         ) : (
           <button
             type="submit"
@@ -1349,6 +1440,32 @@ function IntegrationsPanel({
           bridgePath={agentManager.bridgePath}
           defaultAgent={agentManager.defaultAgent}
           onClose={() => setAgentManager(null)}
+        />
+      ) : null}
+
+      {auth0WizardOpen ? (
+        <Auth0Wizard
+          getAccessTokenSilently={getAccessTokenSilently}
+          onClose={() => setAuth0WizardOpen(false)}
+          onConnected={() => void refresh()}
+          onManageApplications={(integrationId) => {
+            // Close the wizard and open the application manager on the
+            // just-created integration. The manager only needs the id; it
+            // fetches applications itself.
+            setAuth0WizardOpen(false);
+            setAuth0Manager({ integrationId });
+            void refresh();
+          }}
+        />
+      ) : null}
+
+      {auth0Manager ? (
+        <Auth0ApplicationManager
+          getAccessTokenSilently={getAccessTokenSilently}
+          integrationId={auth0Manager.integrationId}
+          domain={auth0Manager.domain}
+          defaultApplicationId={auth0Manager.defaultApplicationId}
+          onClose={() => setAuth0Manager(null)}
         />
       ) : null}
 

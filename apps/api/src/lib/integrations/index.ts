@@ -8,6 +8,7 @@ import { makeOpenAiValidator } from "./validators/openai.js";
 import { makeAnthropicValidator } from "./validators/anthropic.js";
 import { wordpressValidator } from "./validators/wordpress.js";
 import { makeOpenClawValidator } from "./validators/openclaw.js";
+import { makeAuth0Validator } from "./validators/auth0.js";
 
 // Factory pattern: each entry takes a userId and returns a validator.
 // Types that don't need userId (sendgrid, wordpress) ignore it; types that do
@@ -20,6 +21,7 @@ const VALIDATOR_FACTORIES: Record<IntegrationType, ValidatorFactory> = {
   anthropic: makeAnthropicValidator,
   wordpress: () => wordpressValidator,
   openclaw: makeOpenClawValidator,
+  auth0: makeAuth0Validator,
 };
 
 export function getIntegrationValidator(

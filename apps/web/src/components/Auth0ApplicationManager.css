@@ -1,0 +1,192 @@
+/* Auth0 application manager — inline panel under the integrations list, plus
+ * the create/edit dialog form styling. Structural chrome (cards, badges, pills,
+ * buttons, inputs, modals) comes from the design-system primitives. */
+.a0m {
+  margin-top: var(--ai-space-2);
+  padding: var(--ai-space-3) var(--ai-space-4);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--ai-radius-soft);
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-3);
+  font-family: var(--ai-font-sans);
+}
+.a0m-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.a0m-title {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-1);
+  min-width: 0;
+}
+.a0m-title h4 {
+  margin: 0;
+  font-size: var(--ai-text-md);
+}
+.a0m-domain {
+  font-size: var(--ai-text-xs);
+  opacity: 0.55;
+  word-break: break-all;
+}
+.a0m-body {
+  display: flex;
+  gap: var(--ai-space-4);
+  flex-wrap: wrap;
+}
+.a0m-list-pane {
+  flex: 1 1 16rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-2);
+}
+.a0m-detail-pane {
+  flex: 2 1 18rem;
+  min-width: 0;
+}
+.a0m-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.a0m-section-head h5 {
+  margin: 0;
+  font-size: var(--ai-text-sm);
+}
+.a0m-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-2);
+  max-height: 22rem;
+  overflow-y: auto;
+}
+.a0m-app {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-1);
+}
+.a0m-app-name {
+  display: flex;
+  align-items: center;
+  gap: var(--ai-space-2);
+  flex-wrap: wrap;
+  font-weight: var(--ai-weight-semibold);
+}
+.a0m-app-meta {
+  font-size: var(--ai-text-sm);
+  opacity: 0.75;
+  word-break: break-all;
+}
+.a0m-mono {
+  font-family: var(--ai-font-mono);
+}
+.a0m-muted {
+  margin: 0;
+  font-size: var(--ai-text-sm);
+  opacity: 0.7;
+}
+.a0m-error {
+  margin: 0;
+  font-size: var(--ai-text-sm);
+  color: var(--ai-color-error-bg);
+}
+
+/* Detail pane */
+.a0m-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-3);
+}
+.a0m-detail-title {
+  font-size: var(--ai-text-lg);
+  font-weight: var(--ai-weight-semibold);
+}
+.a0m-detail-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-1);
+}
+.a0m-detail-row > .a0m-muted {
+  font-size: var(--ai-text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.a0m-clientid {
+  display: flex;
+  align-items: center;
+  gap: var(--ai-space-2);
+  flex-wrap: wrap;
+}
+.a0m-url-list {
+  margin: 0;
+  padding-left: var(--ai-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-0_5);
+  font-size: var(--ai-text-sm);
+  word-break: break-all;
+}
+.a0m-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ai-space-2);
+  flex-wrap: wrap;
+}
+
+/* Create / edit dialog form */
+.a0m-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-3);
+}
+.a0m-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-1);
+}
+.a0m-field-label {
+  font-size: var(--ai-text-sm);
+  font-weight: var(--ai-weight-medium);
+}
+.a0m-help {
+  font-size: var(--ai-text-xs);
+  opacity: 0.7;
+}
+.a0m-textarea {
+  background: var(--ai-color-neutral-50);
+  color: inherit;
+  border: 1px solid var(--ai-color-neutral-300);
+  border-radius: var(--ai-radius-soft);
+  padding: var(--ai-space-2) var(--ai-space-3);
+  font: inherit;
+  font-size: var(--ai-text-sm);
+  resize: vertical;
+}
+.a0m-textarea:focus {
+  outline: none;
+  border-color: var(--ai-color-primary-500);
+  box-shadow: 0 0 0 2px var(--ai-color-primary-200);
+}
+.a0m-radios {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-1);
+}
+.a0m-radio {
+  display: flex;
+  align-items: center;
+  gap: var(--ai-space-2);
+  font-size: var(--ai-text-sm);
+  cursor: pointer;
+}
+
+@media (prefers-color-scheme: dark) {
+  .a0m-textarea {
+    background: var(--ai-color-neutral-900);
+    border-color: var(--ai-color-neutral-700);
+  }
+}

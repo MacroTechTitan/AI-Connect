@@ -1,0 +1,72 @@
+/* Layout helpers for the Auth0 wizard step content. The structural chrome
+ * (modal, step indicator, footer, buttons, inputs, app cards) comes from the
+ * design-system primitives; these classes only arrange the per-step body. */
+.aw-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-3);
+}
+.aw-list {
+  margin: 0;
+  padding-left: var(--ai-space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-2);
+  line-height: var(--ai-leading-normal);
+}
+.aw-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ai-space-2);
+  flex-wrap: wrap;
+}
+.aw-muted {
+  margin: 0;
+  font-size: var(--ai-text-sm);
+  opacity: 0.7;
+}
+.aw-error {
+  margin: 0;
+  font-size: var(--ai-text-sm);
+  color: var(--ai-color-error-bg);
+}
+
+/* Application picker (cards come from the Card primitive). */
+.aw-app-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-2);
+}
+.aw-app {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-1);
+}
+.aw-app-name {
+  display: flex;
+  align-items: center;
+  gap: var(--ai-space-2);
+  flex-wrap: wrap;
+  font-weight: var(--ai-weight-semibold);
+}
+.aw-app-meta {
+  font-size: var(--ai-text-sm);
+  opacity: 0.75;
+  word-break: break-all;
+}
+.aw-mono {
+  font-family: var(--ai-font-mono);
+}
+
+/* Success summary. */
+.aw-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-2);
+  font-size: var(--ai-text-sm);
+}
+.aw-summary .aw-muted {
+  font-size: var(--ai-text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}

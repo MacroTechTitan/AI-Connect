@@ -1,0 +1,40 @@
+/* Layout helpers for the WordPress wizard step content. The structural chrome
+ * (modal, step indicator, footer, buttons, inputs) comes from the design-system
+ * primitives; these classes only arrange the per-step body. */
+.wpw-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-3);
+}
+.wpw-list {
+  margin: 0;
+  padding-left: var(--ai-space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-2);
+  line-height: var(--ai-leading-normal);
+}
+.wpw-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ai-space-2);
+  flex-wrap: wrap;
+}
+.wpw-muted {
+  margin: 0;
+  font-size: var(--ai-text-sm);
+  opacity: 0.7;
+}
+.wpw-error {
+  margin: 0;
+  font-size: var(--ai-text-sm);
+  color: var(--ai-color-error-bg);
+}
+.wpw-success-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-1);
+}
+.wpw-link {
+  color: var(--ai-color-primary-500);
+}

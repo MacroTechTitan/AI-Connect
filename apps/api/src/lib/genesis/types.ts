@@ -1,8 +1,8 @@
 import type { Platform, ValidatedIdentity } from "../platforms/index.js";
 
-// The seven provisioning steps the orchestrator walks in order. The order in
-// this union is declaration order only — the executed order lives in
-// GENESIS_STEPS (steps.ts). New steps slot in here and there together.
+// The provisioning steps the orchestrator walks in order. The order in this
+// union is declaration order only — the executed order lives in GENESIS_STEPS
+// (steps.ts). New steps slot in here and there together.
 export type GenesisStepName =
   | "create_github_repo"
   | "create_vercel_project"
@@ -10,7 +10,8 @@ export type GenesisStepName =
   | "create_supabase_project"
   | "wire_github_to_render"
   | "inject_env_vars"
-  | "verify_deployment";
+  | "verify_deployment"
+  | "wire_auth0";
 
 // The three templates Project Genesis can scaffold from. Mirrors the
 // projects.template_choice CHECK constraint.

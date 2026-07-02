@@ -64,6 +64,13 @@
       "when": 1782308830898,
       "tag": "0008_fancy_ozymandias",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1782785819342,
+      "tag": "0009_abandoned_lenny_balinger",
+      "breakpoints": true
     }
   ]
 }

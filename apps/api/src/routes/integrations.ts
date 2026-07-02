@@ -5,11 +5,19 @@ import { getDb } from "../db/client.js";
 import { integrations } from "../db/schema.js";
 import { getIntegrationValidator } from "../lib/integrations/index.js";
 import {
+  auth0Client,
+  Auth0Error,
+  type Auth0AppType,
+  type CreateApplicationParams,
+  type UpdateApplicationCallbacksParams,
+} from "../lib/integrations/auth0Client.js";
+import {
   openclawClient,
   OpenClawError,
 } from "../lib/integrations/openclawClient.js";
 import {
   isIntegrationType,
+  type Auth0Config,
   type IntegrationConfig,
   type IntegrationType,
   type OpenClawConfig,
@@ -128,11 +136,13 @@ async function handleAddIntegration(
   }
   const configIn = (rawConfig ?? {}) as Record<string, unknown>;
 
-  // Credential is required for sendgrid (API key) and wordpress (plugin token);
-  // openai/anthropic reuse an existing provider_keys row via provider_key_id and
-  // store no Vault secret of their own.
+  // Credential is required for sendgrid (API key), wordpress (plugin token), and
+  // auth0 (M2M client_secret); openai/anthropic reuse an existing provider_keys
+  // row via provider_key_id and store no Vault secret of their own.
   const credentialRequired =
-    integrationType === "sendgrid" || integrationType === "wordpress";
+    integrationType === "sendgrid" ||
+    integrationType === "wordpress" ||
+    integrationType === "auth0";
 
   let credential: string | undefined;
   if (credentialRequired) {
@@ -168,6 +178,25 @@ async function handleAddIntegration(
       return;
     }
     config = { site_url: siteUrl };
+  } else if (integrationType === "auth0") {
+    const domainRaw = configIn.domain;
+    if (
+      typeof domainRaw !== "string" ||
+      domainRaw.length === 0 ||
+      domainRaw.length > MAX_URL_CHARS
+    ) {
+      res.status(400).json({ error: "invalid_auth0_domain" });
+      return;
+    }
+    const m2mClientId = configIn.m2m_client_id;
+    if (typeof m2mClientId !== "string" || m2mClientId.length === 0) {
+      res.status(400).json({ error: "missing_m2m_client_id" });
+      return;
+    }
+    // Normalize the domain (strip protocol + trailing slash) so the stored
+    // config is clean; the validator and routes prepend https:// themselves.
+    const domain = domainRaw.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+    config = { domain, m2m_client_id: m2mClientId };
   } else {
     // sendgrid — credential is the whole story.
     config = {};
@@ -866,6 +895,372 @@ async function handleOpenClawDiscover(
   }
 }
 
+// ── Auth0 application management ─────────────────────────────────────────────
+// These routes proxy to the user's Auth0 Management API. They load the auth0
+// integration row (org- + user-scoped), read its M2M client_secret from Vault,
+// and call auth0Client. The integration must be type=auth0 and validated.
+
+interface Auth0Target {
+  integrationId: string;
+  config: Auth0Config;
+  m2mSecret: string;
+}
+
+const AUTH0_APP_TYPES: readonly Auth0AppType[] = [
+  "spa",
+  "native",
+  "regular_web",
+  "non_interactive",
+];
+
+function asStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  if (!value.every((v) => typeof v === "string")) return undefined;
+  return value as string[];
+}
+
+function asAuth0AppType(value: unknown): Auth0AppType | undefined {
+  return typeof value === "string" &&
+    (AUTH0_APP_TYPES as readonly string[]).includes(value)
+    ? (value as Auth0AppType)
+    : undefined;
+}
+
+// Resolves the auth0 integration for req.params.id (org- + user-scoped) and
+// reads its M2M secret from Vault. Writes the error response and returns null on
+// any failure (bad id / not found / wrong type / not validated / missing
+// secret). Mirrors resolveWordPressTarget / resolveOpenClawTarget.
+async function resolveAuth0Target(
+  req: Request,
+  res: Response,
+): Promise<Auth0Target | null> {
+  const ctx = getCtx(req);
+  const integrationId = req.params.id;
+  if (typeof integrationId !== "string" || !UUID_RE.test(integrationId)) {
+    res.status(404).json({
+      error: "integration_not_found",
+      message: "Integration not found or does not belong to this user.",
+    });
+    return null;
+  }
+
+  const [row] = await getDb()
+    .select({
+      id: integrations.id,
+      integrationType: integrations.integrationType,
+      config: integrations.config,
+      status: integrations.status,
+      vaultSecretId: integrations.vaultSecretId,
+    })
+    .from(integrations)
+    .where(
+      and(
+        orgScopeFilter(integrations, ctx),
+        eq(integrations.id, integrationId),
+        eq(integrations.userId, ctx.userId),
+      ),
+    )
+    .limit(1);
+
+  if (!row) {
+    res.status(404).json({
+      error: "integration_not_found",
+      message: "Integration not found or does not belong to this user.",
+    });
+    return null;
+  }
+  if (row.integrationType !== "auth0") {
+    res.status(400).json({
+      error: "wrong_integration_type",
+      message: `Integration is type '${row.integrationType}', expected 'auth0'.`,
+    });
+    return null;
+  }
+  if (row.status !== "validated") {
+    res.status(400).json({
+      error: "integration_not_validated",
+      message: `Integration has status '${row.status}'. Run validation first.`,
+    });
+    return null;
+  }
+  if (!row.vaultSecretId) {
+    res.status(500).json({
+      error: "vault_secret_missing",
+      message: "Integration has no vault secret on file.",
+    });
+    return null;
+  }
+
+  let m2mSecret: string;
+  try {
+    m2mSecret = await vault.getSecret(row.vaultSecretId);
+  } catch (err) {
+    res.status(500).json({
+      error: "vault_read_failed",
+      message: `Could not read M2M secret from vault: ${
+        err instanceof Error ? err.message : "unknown error"
+      }`,
+    });
+    return null;
+  }
+
+  return { integrationId: row.id, config: row.config as Auth0Config, m2mSecret };
+}
+
+// Maps an Auth0Error to an HTTP status. Anything non-Auth0Error is rethrown for
+// the global handler.
+function handleAuth0Error(err: unknown, res: Response): void {
+  if (err instanceof Auth0Error) {
+    const statusByCode: Record<string, number> = {
+      invalid_credentials: 401,
+      insufficient_scope: 403,
+      application_not_found: 404,
+      application_already_exists: 409,
+      rate_limited: 429,
+      validation_error: 400,
+      network_error: 502,
+      token_refresh_failed: 502,
+      unexpected_response: 502,
+    };
+    res.status(statusByCode[err.code] ?? 502).json({
+      error: err.code,
+      message: err.message,
+      details: err.responseBody,
+    });
+    return;
+  }
+  throw err;
+}
+
+async function handleListAuth0Applications(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const target = await resolveAuth0Target(req, res);
+  if (!target) return;
+  try {
+    const applications = await auth0Client.listApplications(
+      target.config.domain,
+      target.config.m2m_client_id,
+      target.m2mSecret,
+    );
+    // The list endpoint never exposes secrets (a single GET does, if the M2M
+    // cred has read:client_keys). Strip client_secret defensively.
+    const sanitized = applications.map((app) => ({
+      ...app,
+      client_secret: undefined,
+    }));
+    res.status(200).json({ applications: sanitized });
+  } catch (err) {
+    handleAuth0Error(err, res);
+  }
+}
+
+async function handleGetAuth0Application(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const target = await resolveAuth0Target(req, res);
+  if (!target) return;
+  const appId = req.params.appId;
+  if (typeof appId !== "string" || appId.length === 0) {
+    res.status(400).json({
+      error: "application_id_required",
+      message: "application_id is required.",
+    });
+    return;
+  }
+  try {
+    const application = await auth0Client.getApplication(
+      target.config.domain,
+      target.config.m2m_client_id,
+      target.m2mSecret,
+      appId,
+    );
+    res.status(200).json({ application });
+  } catch (err) {
+    handleAuth0Error(err, res);
+  }
+}
+
+async function handleCreateAuth0Application(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const target = await resolveAuth0Target(req, res);
+  if (!target) return;
+  const ctx = getCtx(req);
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const name = body.name;
+  if (typeof name !== "string" || name.length === 0) {
+    res.status(400).json({
+      error: "name_required",
+      message: "Application name is required.",
+    });
+    return;
+  }
+  if (name.length > 100) {
+    res.status(400).json({
+      error: "name_too_long",
+      message: "Application name exceeds 100 character limit.",
+    });
+    return;
+  }
+
+  const params: CreateApplicationParams = {
+    name,
+    description:
+      typeof body.description === "string" ? body.description : undefined,
+    app_type: asAuth0AppType(body.app_type),
+    callbacks: asStringArray(body.callbacks),
+    allowed_logout_urls: asStringArray(body.allowed_logout_urls),
+    allowed_origins: asStringArray(body.allowed_origins),
+    web_origins: asStringArray(body.web_origins),
+  };
+
+  try {
+    const application = await auth0Client.createApplication(
+      target.config.domain,
+      target.config.m2m_client_id,
+      target.m2mSecret,
+      params,
+    );
+    await logUserAction(
+      ctx.userId,
+      "auth0_application_created",
+      "integration",
+      target.integrationId,
+      ctx.organizationId,
+      {
+        application_id: application.client_id,
+        application_name: application.name,
+      },
+    );
+    res.status(201).json({ application });
+  } catch (err) {
+    handleAuth0Error(err, res);
+  }
+}
+
+async function handleUpdateAuth0Callbacks(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const target = await resolveAuth0Target(req, res);
+  if (!target) return;
+  const ctx = getCtx(req);
+  const appId = req.params.appId;
+  if (typeof appId !== "string" || appId.length === 0) {
+    res.status(400).json({
+      error: "application_id_required",
+      message: "application_id is required.",
+    });
+    return;
+  }
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const params: UpdateApplicationCallbacksParams = {
+    callbacks: asStringArray(body.callbacks),
+    allowed_logout_urls: asStringArray(body.allowed_logout_urls),
+    allowed_origins: asStringArray(body.allowed_origins),
+    web_origins: asStringArray(body.web_origins),
+  };
+
+  try {
+    const application = await auth0Client.updateApplicationCallbacks(
+      target.config.domain,
+      target.config.m2m_client_id,
+      target.m2mSecret,
+      appId,
+      params,
+    );
+    await logUserAction(
+      ctx.userId,
+      "auth0_application_callbacks_updated",
+      "integration",
+      target.integrationId,
+      ctx.organizationId,
+      { application_id: application.client_id },
+    );
+    res.status(200).json({ application });
+  } catch (err) {
+    handleAuth0Error(err, res);
+  }
+}
+
+// Sets default_application_id on the auth0 integration's config (metadata about
+// which app new projects should use — stored on our row, not on Auth0's side).
+// Pure DB update, so it does not need resolveAuth0Target's vault read.
+async function handleSetAuth0DefaultApplication(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const ctx = getCtx(req);
+  const integrationId = req.params.id;
+  if (typeof integrationId !== "string" || !UUID_RE.test(integrationId)) {
+    res.status(404).json({ error: "integration_not_found" });
+    return;
+  }
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const applicationId = body.application_id;
+  if (typeof applicationId !== "string" || applicationId.length === 0) {
+    res.status(400).json({
+      error: "application_id_required",
+      message: "application_id is required.",
+    });
+    return;
+  }
+
+  const [row] = await getDb()
+    .select({
+      id: integrations.id,
+      integrationType: integrations.integrationType,
+      config: integrations.config,
+    })
+    .from(integrations)
+    .where(
+      and(
+        orgScopeFilter(integrations, ctx),
+        eq(integrations.id, integrationId),
+        eq(integrations.userId, ctx.userId),
+      ),
+    )
+    .limit(1);
+
+  if (!row || row.integrationType !== "auth0") {
+    res.status(404).json({
+      error: "integration_not_found",
+      message: "Auth0 integration not found.",
+    });
+    return;
+  }
+
+  const newConfig: Auth0Config = {
+    ...(row.config as Auth0Config),
+    default_application_id: applicationId,
+  };
+
+  await getDb()
+    .update(integrations)
+    .set({ config: newConfig, updatedAt: new Date() })
+    .where(eq(integrations.id, row.id));
+
+  await logUserAction(
+    ctx.userId,
+    "auth0_default_application_set",
+    "integration",
+    row.id,
+    ctx.organizationId,
+    { application_id: applicationId },
+  );
+
+  res
+    .status(200)
+    .json({ success: true, default_application_id: applicationId });
+}
+
 export function registerIntegrationsRoutes(app: Express): void {
   app.post(
     "/api/integrations",
@@ -945,5 +1340,39 @@ export function registerIntegrationsRoutes(app: Express): void {
     requireAuth,
     requireHydratedUser,
     handleSendOpenClawMessage,
+  );
+
+  // Auth0 application management — proxies to the Auth0 Management API. Each
+  // path requires a validated auth0 integration; the M2M secret is read from
+  // the integration's Vault entry per request (see resolveAuth0Target).
+  app.get(
+    "/api/integrations/:id/auth0/applications",
+    requireAuth,
+    requireHydratedUser,
+    handleListAuth0Applications,
+  );
+  app.post(
+    "/api/integrations/:id/auth0/applications",
+    requireAuth,
+    requireHydratedUser,
+    handleCreateAuth0Application,
+  );
+  app.get(
+    "/api/integrations/:id/auth0/applications/:appId",
+    requireAuth,
+    requireHydratedUser,
+    handleGetAuth0Application,
+  );
+  app.patch(
+    "/api/integrations/:id/auth0/applications/:appId/callbacks",
+    requireAuth,
+    requireHydratedUser,
+    handleUpdateAuth0Callbacks,
+  );
+  app.patch(
+    "/api/integrations/:id/auth0/default-application",
+    requireAuth,
+    requireHydratedUser,
+    handleSetAuth0DefaultApplication,
   );
 }
