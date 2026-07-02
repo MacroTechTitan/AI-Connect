@@ -419,6 +419,65 @@ NOT YET EXECUTED. Sprint 7 is shipped from a code perspective; live verification
 - Auth0 connector + AI Connect's own Auth0 management UI (user list, role assignment, Auth0 tenant config visible in AI Connect)
 - Stripe connector + AI Connect's own subscription/billing management UI (use Stripe for AI Connect's own paid tiers when those launch)
 
+## Sprint 8 — Design System + Auth0 Connector (2026-06-24)
+- Branch: sprint/8-design-system-and-auth0
+- Merged via PR #15 on 2026-06-24
+- 13 commits + 1 merged from master (WordPress connector docs)
+
+### What shipped
+- Design system foundation: apps/web/src/ui/tokens.ts with the full visual language (colors, typography, spacing, radii, shadows, timings, easings, z-index) as TypeScript constants; injected as --ai-* CSS custom properties at document root via injectTokens() in main.tsx. Not Tailwind — deliberate choice (documented in DESIGN_SYSTEM.md).
+- 8 primitive components in apps/web/src/ui/ with matching .demo.tsx files: Button (4 variants × 3 sizes), Input (label/helper/error/prefix/suffix), Modal (4 sizes, focus trap, escape/backdrop close), Card (3 variants, padding scale, interactive mode), Badge (5 variants using subtle_bg/subtle_fg token pairs), Pill (rounded badge with sizes), Wizard (step indicator, footer nav, hideFooter prop), Toast (Provider + useToast hook, 4 variants, auto-dismiss).
+- /ui demo route (or ?ui=demo query param) renders all primitives as a live components page — gated in main.tsx at the render root to avoid conditional hooks smell in App.
+- Existing wizard refactors: WordPressWizard.tsx and OpenClawWizard.tsx now use the new primitives. UX preserved verbatim — Sprint 6 + 7 smoke tests should still pass (deferred, per pattern). Dead wp-wizard-* CSS classes removed after both wizards migrated.
+- Wizard hideFooter pattern established: primitive supports default footer (Back/Continue) AND hideFooter mode where step content owns its actions. Three wizards use both patterns.
+- Auth0 connector — full stack.
+- apps/api/src/lib/integrations/types.ts extended with 'auth0', Auth0Config, Auth0Identity.
+- apps/api/src/lib/integrations/auth0Client.ts — Auth0Client class wrapping the Management API. Hand-rolled fetch, no SDK. M2M token caching with 5min refresh buffer, per-(domain, client_id) cache. Methods: getManagementToken, listApplications, getApplication, createApplication, updateApplicationCallbacks, getTenantInfo, verifyScopes. Auth0Error typed with 9-code union.
+- apps/api/src/lib/integrations/validators/auth0.ts — domain shape check + normalize, M2M token fetch, read:clients scope verification, list-apps sanity check, identity with granted scopes.
+- Migration 0009: extend integration_type CHECK constraint to include 'auth0'. Applied to AI Connect Supabase manually via SQL editor per pattern.
+- apps/api/src/routes/integrations.ts wired: POST /api/integrations accepts auth0 (credential + config: {domain, m2m_client_id}). Five new routes: GET /:id/auth0/applications, GET /:id/auth0/applications/:appId, POST /:id/auth0/applications, PATCH /:id/auth0/applications/:appId/callbacks, PATCH /:id/auth0/default-application. Org-scoped via resolveAuth0Target, errors mapped via handleAuth0Error.
+- apps/api/src/lib/genesis/auth0Wiring.ts — new wire_auth0 genesis step. Creates regular_web Auth0 app named after project (Commit 8.5 fixed from spa). Configures callbacks: ${renderUrl}/callback + ${renderUrl}/api/auth/callback. Syncs AUTH0_DOMAIN, AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET, AUTH0_AUDIENCE to Render env vars via get→merge→put pattern. Best-effort: genesis step always returns 'succeeded' with details.auth0_wiring — never triggers rollback. Failure modes as typed Auth0WiringResult: no_integration, integration_not_validated, vault_read_failed, auth0_app_creation_failed, render_env_sync_failed.
+- apps/web/src/components/Auth0Wizard.tsx — 5 steps (Welcome, Credentials, Validate, Pick App, Done) on new primitives. Steps 1-2 default footer; 3-5 hideFooter with contextual inline actions. Error mapping to real API shape (integration_invalid, invalid_auth0_domain, missing_m2m_client_id).
+- apps/web/src/components/Auth0ApplicationManager.tsx — two-pane inline panel parallel to OpenClawAgentManager. Left: apps list as Cards with app_type Badge + Default Pill + client_id preview + callback count. Right: selected app details + Set as Default + Edit Callback URLs actions. Create New Application modal (regular_web default). Edit Callback URLs modal.
+- App.tsx: Auth0 added to integration type selector, describeIntegrationIdentity case ("Default app: {name}" / "{n} apps" / "Ready for new projects"), Manage Applications + Test Connection buttons on integration rows, wizard's onManageApplications callback wired to open Auth0ApplicationManager.
+- docs/AUTH0_CONNECTOR.md — user-facing setup guide. Prerequisites (M2M app with read:clients, create:clients, update:clients, read:client_keys scopes), 5-step wizard walkthrough with error troubleshooting, Project Genesis auto-wiring behavior (regular_web app, callback patterns, env-var sync, best-effort failure reasons, deploy-timing caveat), application manager operations, security model, deferred items.
+- docs/DESIGN_SYSTEM.md — developer guide for extending AI Connect. Design token reference, 8-primitive table with usage patterns, hideFooter Wizard pattern explanation, accessibility floor, dark-mode caveat, why-not-Tailwind rationale.
+- docs/sprints/SPRINT_8_TESTING.md — smoke test plan sections A-E covering design system regression, Auth0 setup flow, application manager, Project Genesis wiring, cross-cutting consistency.
+- docs/WORDPRESS_CONNECTOR.md (from direct-to-master commit db329ee, merged in during Sprint 8): WordPress connector architecture, security model, module rendering flow, setup walkthrough, limitations.
+
+### Why this matters
+Sprint 8 is a two-fold structural milestone. First, AI Connect's UI becomes a designed feature rather than an accreted one. Design tokens as source of truth, primitive components that compose consistently, three wizards now sharing the same visual language and interaction patterns. That's the foundation every future UI feature builds on. Second, Auth0 connector is the first "AI Connect creates real production resources on the user's behalf" integration. When a project is provisioned, AI Connect creates a real Auth0 application in the user's tenant with correct callbacks and syncs credentials to Render — that's automation with real security consequences, handled with best-effort semantics so provisioning never fails on the Auth0 step. Together these establish the Sprint 9+ pattern: consumer-grade UX for developer-grade orchestration.
+
+### Smoke test (deferred to first opportunity)
+Sprint 8 smoke test plan documented in docs/sprints/SPRINT_8_TESTING.md. Sections A-E cover design system regression (Sprint 6/7 wizards on new primitives), Auth0 wizard setup + validation error paths, application manager operations, Project Genesis wiring on a real provisioned project, cross-cutting consistency across all three wizards.
+
+NOT YET EXECUTED. Sprint 8 shipped from a code perspective; live verification awaits a session with real Auth0 tenant M2M creds. Same "deferred smoke test" pattern as Sprint 7.
+
+### What's NOT done (deferred to Sprint 8.5+ or 9)
+- Smoke test execution (needs real Auth0 tenant + M2M creds)
+- Auto-redeploy of Render service after AUTH0_* env sync (env vars only take effect on next deploy currently) — Sprint 8.5
+- Multi-tenant Auth0 support — Sprint 8.5+
+- Real per-project AUTH0_AUDIENCE (currently https://api.${slug}.com placeholder) — Sprint 8.5
+- Auth0 user management (list users, create users, password resets) — Sprint 9+
+- Auth0 connections config (Database vs Social vs Enterprise) — Sprint 10+
+- Auth0 Actions / Rules wiring — Sprint 11+
+- Auth0 Branding / Universal Login customization — Sprint 11+
+- Delete application UX (deliberately omitted from v1 — Auth0 API supports it) — Sprint 8.5
+- Search/filter in application manager — Sprint 8.5
+- Full theme switcher (dark mode currently via prefers-color-scheme; app hardcodes dark bg regardless) — Sprint 9+
+- Storybook proper (instead of /ui demo route) — Sprint 9+
+- Deeper accessibility work: screen reader announcements, ARIA on icon-only buttons, high contrast mode, reduced motion — Sprint 9+
+- Stripe connector — Sprint 9
+- AI Connect's own paid tier — Sprint 9
+- AI Connect's own internal Auth0 management UI (convenience for admin) — Sprint 9 or 10
+- Help center / user manual — Sprint 9 or 10
+
+### Sprint 9 candidates locked from conversation
+- Stripe connector + AI Connect's own paid tier launch — natural pairing
+- Help center / user manual (in-app docs at /help, sidebar nav per feature, ? links from each panel)
+- AI Connect's own internal management UIs (Auth0 tenants, Stripe subscriptions) — admin conveniences
+- Sprint 8.5 items (auto-redeploy, multi-tenant Auth0, real audience, delete UX, search/filter)
+
 ---
 
 *Last updated: 2026-06-24*
