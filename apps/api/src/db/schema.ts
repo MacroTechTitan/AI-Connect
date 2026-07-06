@@ -85,6 +85,13 @@ export const projects = pgTable(
     // create_render_service time and shown in the frontend. NULL until the
     // Render service is created.
     deployedUrl: text("deployed_url"),
+    // Sprint 9: the Stripe Express Connected Account ID (e.g. 'acct_1AbC...')
+    // created for this project's Stripe wiring. NULL for projects without
+    // Stripe wiring. Stripe IDs live in Stripe's API, so no FK here.
+    stripeAccountId: text("stripe_account_id"),
+    // Sprint 9: reflects the Connect account.updated webhook state. NULL until
+    // a Stripe account is wired.
+    stripeAccountStatus: text("stripe_account_status"),
     // References a vault.secrets entry holding the project's Supabase Postgres
     // connection string. NULL until create_supabase_project captures it.
     databaseConnectionStringVaultId: uuid("database_connection_string_vault_id"),
@@ -106,6 +113,10 @@ export const projects = pgTable(
     templateChoiceCheck: check(
       "projects_template_choice_check",
       sql`${table.templateChoice} IN ('html-js', 'sveltekit', 'nextjs')`,
+    ),
+    stripeAccountStatusCheck: check(
+      "projects_stripe_account_status_check",
+      sql`${table.stripeAccountStatus} IS NULL OR ${table.stripeAccountStatus} IN ('pending', 'active', 'restricted')`,
     ),
     organizationIdIdx: index("idx_projects_organization_id").on(
       table.organizationId,
@@ -464,7 +475,7 @@ export const integrations = pgTable(
   (table) => ({
     integrationTypeCheck: check(
       "integrations_integration_type_check",
-      sql`${table.integrationType} IN ('sendgrid', 'openai', 'anthropic', 'wordpress', 'openclaw', 'auth0')`,
+      sql`${table.integrationType} IN ('sendgrid', 'openai', 'anthropic', 'wordpress', 'openclaw', 'auth0', 'stripe')`,
     ),
     statusCheck: check(
       "integrations_status_check",
@@ -566,3 +577,34 @@ export const subscriptions = pgTable(
 
 export type SubscriptionRow = typeof subscriptions.$inferSelect;
 export type NewSubscription = typeof subscriptions.$inferInsert;
+
+export const stripeWebhookEvents = pgTable(
+  "stripe_webhook_events",
+  {
+    // Stripe's event.id (e.g. 'evt_1AbCdE...'). Natural key: PK conflict on
+    // INSERT means a duplicate delivery, safe to skip.
+    id: text("id").primaryKey(),
+    eventType: text("event_type").notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    // false = received but handler failed (allows retry); true = processed OK.
+    processed: boolean("processed").notNull().default(false),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    // Last handler error message, for observability.
+    processingError: text("processing_error"),
+    // Full event payload for audit/replay if needed.
+    payload: jsonb("payload").notNull(),
+  },
+  (table) => ({
+    eventTypeIdx: index("stripe_webhook_events_event_type_idx").on(
+      table.eventType,
+    ),
+    receivedAtIdx: index("stripe_webhook_events_received_at_idx").on(
+      table.receivedAt,
+    ),
+  }),
+);
+
+export type StripeWebhookEventRow = typeof stripeWebhookEvents.$inferSelect;
+export type NewStripeWebhookEvent = typeof stripeWebhookEvents.$inferInsert;
