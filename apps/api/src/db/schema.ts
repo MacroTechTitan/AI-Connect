@@ -515,3 +515,54 @@ export const projectProvisioningEvents = pgTable(
       .where(sql`${table.status} IN ('pending', 'in_progress')`),
   }),
 );
+
+export const subscriptions = pgTable(
+  "subscriptions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id").references(
+      () => organizations.id,
+      { onDelete: "set null" },
+    ),
+    // Nullable: grandfathered users have neither stripe ID; Free users may have
+    // a customer record but no subscription yet.
+    stripeCustomerId: text("stripe_customer_id"),
+    stripeSubscriptionId: text("stripe_subscription_id"),
+    tier: text("tier").notNull().default("free"),
+    status: text("status").notNull().default("active"),
+    currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
+    cancelAtPeriodEnd: boolean("cancel_at_period_end")
+      .notNull()
+      .default(false),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    // One subscription per user in v1.
+    userIdUnique: unique("subscriptions_user_id_unique").on(table.userId),
+    stripeCustomerIdUnique: unique(
+      "subscriptions_stripe_customer_id_unique",
+    ).on(table.stripeCustomerId),
+    stripeSubscriptionIdUnique: unique(
+      "subscriptions_stripe_subscription_id_unique",
+    ).on(table.stripeSubscriptionId),
+    tierCheck: check(
+      "subscriptions_tier_check",
+      sql`${table.tier} IN ('free', 'pro')`,
+    ),
+    statusCheck: check(
+      "subscriptions_status_check",
+      sql`${table.status} IN ('active', 'past_due', 'canceled', 'incomplete', 'trialing')`,
+    ),
+  }),
+);
+
+export type SubscriptionRow = typeof subscriptions.$inferSelect;
+export type NewSubscription = typeof subscriptions.$inferInsert;

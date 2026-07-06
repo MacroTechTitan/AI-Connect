@@ -71,6 +71,13 @@
       "when": 1782785819342,
       "tag": "0009_abandoned_lenny_balinger",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1783344381149,
+      "tag": "0010_quiet_jasper_sitwell",
+      "breakpoints": true
     }
   ]
 }
