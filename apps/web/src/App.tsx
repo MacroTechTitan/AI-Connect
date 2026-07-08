@@ -14,6 +14,8 @@ import { OpenClawAgentManager } from "./components/OpenClawAgentManager";
 import { OpenClawWizard } from "./components/OpenClawWizard";
 import { PricingPage } from "./components/PricingPage";
 import { SessionExpiredNotice } from "./components/SessionExpiredNotice";
+import { StripeAccountManager } from "./components/StripeAccountManager";
+import { StripeWizard } from "./components/StripeWizard";
 import { SubscriptionPanel } from "./components/SubscriptionPanel";
 import { UpgradePromptModal } from "./components/UpgradePromptModal";
 import { WordPressModuleManager } from "./components/WordPressModuleManager";
@@ -653,7 +655,8 @@ type IntegrationType =
   | "anthropic"
   | "wordpress"
   | "openclaw"
-  | "auth0";
+  | "auth0"
+  | "stripe";
 
 const INTEGRATION_LABEL: Record<IntegrationType, string> = {
   sendgrid: "SendGrid",
@@ -662,6 +665,7 @@ const INTEGRATION_LABEL: Record<IntegrationType, string> = {
   wordpress: "WordPress",
   openclaw: "OpenClaw",
   auth0: "Auth0",
+  stripe: "Stripe",
 };
 
 interface Integration {
@@ -739,6 +743,18 @@ function describeIntegrationIdentity(
       if (count !== null) return `${count} app${count === 1 ? "" : "s"}`;
       return "Ready for new projects";
     }
+    case "stripe": {
+      // Identity (POST) carries the derived account status; on reload it falls
+      // back to a generic line until "Test Connection" refreshes it.
+      const status =
+        sessionIdentity && typeof sessionIdentity.status === "string"
+          ? sessionIdentity.status
+          : null;
+      if (status === "active") return "Account active";
+      if (status === "pending") return "Onboarding pending";
+      if (status === "restricted") return "Account restricted";
+      return "Connected";
+    }
   }
 }
 
@@ -789,6 +805,13 @@ function IntegrationsPanel({
     integrationId: string;
     domain?: string;
     defaultApplicationId?: string;
+  } | null>(null);
+  // Stripe Connect uses a guided wizard too (cloud mode — no gating).
+  const [stripeWizardOpen, setStripeWizardOpen] = useState(false);
+  // Inline Stripe account manager (opened from a row or the wizard's final
+  // step). Only the id is required to call the API.
+  const [stripeManager, setStripeManager] = useState<{
+    integrationId: string;
   } | null>(null);
   const [localMode, setLocalMode] = useState<boolean | null>(null);
   // Inline agent manager (opened from a row or from the wizard's final step).
@@ -1084,7 +1107,7 @@ function IntegrationsPanel({
 
   // Light-touch revalidation: GET the type's read endpoint and surface ok/fail
   // inline on the row (no toast system in this app). Result clears on next run.
-  // OpenClaw lists agents; Auth0 lists applications.
+  // OpenClaw lists agents; Auth0 lists applications; Stripe reads the account.
   async function handleTestConnection(c: Integration) {
     setTestStatus((prev) => {
       const next = { ...prev };
@@ -1092,15 +1115,19 @@ function IntegrationsPanel({
       return next;
     });
     const isAuth0 = c.integration_type === "auth0";
+    const isStripe = c.integration_type === "stripe";
     const path = isAuth0
       ? `/api/integrations/${c.id}/auth0/applications`
-      : `/api/integrations/${c.id}/agents`;
+      : isStripe
+        ? `/api/integrations/${c.id}/stripe/account`
+        : `/api/integrations/${c.id}/agents`;
     try {
       const res = await authedFetch(path, {}, getAccessTokenSilently);
       if (res.ok) {
         const body = (await res.json().catch(() => ({}))) as {
           agents?: unknown[];
           applications?: unknown[];
+          status?: string;
         };
         if (isAuth0) {
           const count = Array.isArray(body.applications)
@@ -1111,6 +1138,16 @@ function IntegrationsPanel({
             [c.id]: {
               ok: true,
               msg: `Connected — ${count} application(s) in the tenant.`,
+            },
+          }));
+          return;
+        }
+        if (isStripe) {
+          setTestStatus((prev) => ({
+            ...prev,
+            [c.id]: {
+              ok: true,
+              msg: `Connected — account status: ${body.status ?? "unknown"}.`,
             },
           }));
           return;
@@ -1303,6 +1340,26 @@ function IntegrationsPanel({
                       </button>
                     </>
                   ) : null}
+                  {c.integration_type === "stripe" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() =>
+                          setStripeManager({ integrationId: c.id })
+                        }
+                      >
+                        Manage Account
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => void handleTestConnection(c)}
+                      >
+                        Test Connection
+                      </button>
+                    </>
+                  ) : null}
                   <button
                     type="button"
                     className="btn-danger"
@@ -1334,6 +1391,7 @@ function IntegrationsPanel({
             <option value="anthropic">Anthropic</option>
             <option value="wordpress">WordPress</option>
             <option value="auth0">Auth0</option>
+            <option value="stripe">Stripe</option>
             <option
               value="openclaw"
               disabled={localMode === false}
@@ -1423,6 +1481,21 @@ function IntegrationsPanel({
               Connect Auth0
             </button>
           </>
+        ) : addType === "stripe" ? (
+          <>
+            <p className="muted">
+              Connecting Stripe lets AI Connect create a Stripe Express account
+              for projects you provision so they can accept payments. The wizard
+              walks you through it.
+            </p>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => setStripeWizardOpen(true)}
+            >
+              Connect Stripe
+            </button>
+          </>
         ) : (
           <button
             type="submit"
@@ -1496,6 +1569,29 @@ function IntegrationsPanel({
           domain={auth0Manager.domain}
           defaultApplicationId={auth0Manager.defaultApplicationId}
           onClose={() => setAuth0Manager(null)}
+        />
+      ) : null}
+
+      {stripeWizardOpen ? (
+        <StripeWizard
+          getAccessTokenSilently={getAccessTokenSilently}
+          onClose={() => setStripeWizardOpen(false)}
+          onConnected={() => void refresh()}
+          onManageAccount={(integrationId) => {
+            // Close the wizard and open the account manager on the just-created
+            // integration so the user can watch onboarding status settle.
+            setStripeWizardOpen(false);
+            setStripeManager({ integrationId });
+            void refresh();
+          }}
+        />
+      ) : null}
+
+      {stripeManager ? (
+        <StripeAccountManager
+          getAccessTokenSilently={getAccessTokenSilently}
+          integrationId={stripeManager.integrationId}
+          onClose={() => setStripeManager(null)}
         />
       ) : null}
 
