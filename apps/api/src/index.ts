@@ -12,6 +12,7 @@ import { registerPlatformCredentialsRoutes } from "./routes/platformCredentials.
 import { registerProjectsRoutes } from "./routes/projects.js";
 import { registerPromptRoutes } from "./routes/prompt.js";
 import { registerStripeWebhookRoutes } from "./routes/stripeWebhook.js";
+import { registerSubscriptionRoutes } from "./routes/subscription.js";
 import { registerWordPressPluginRoutes } from "./routes/wordpressPlugin.js";
 
 const app = express();
@@ -103,6 +104,11 @@ registerIntegrationsRoutes(app);
 // /api/integrations/wordpress/plugin.zip — Auth0 JWT-gated; streams the AI
 // Connect WordPress plugin as a .zip generated on the fly from wp-plugin/.
 registerWordPressPluginRoutes(app);
+
+// /api/subscription/* — Auth0 JWT-gated; drives AI Connect's paid tier via
+// Stripe (checkout, customer portal, status, cancel). The Stripe webhook that
+// reconciles these lives at /api/stripe/webhook (registered above, pre-JSON).
+registerSubscriptionRoutes(app);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "not_found" });
