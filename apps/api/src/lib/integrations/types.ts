@@ -4,7 +4,8 @@ export type IntegrationType =
   | "anthropic"
   | "wordpress"
   | "openclaw"
-  | "auth0";
+  | "auth0"
+  | "stripe";
 
 export type IntegrationStatus = "pending" | "validated" | "failed";
 
@@ -48,13 +49,36 @@ export type Auth0Config = {
   m2m_client_id: string;
   default_application_id?: string;
 };
+/**
+ * Stripe Connect integration configuration.
+ *
+ * stripe_account_id — the Express Connected Account ID (e.g., 'acct_1Ab...').
+ *   Created during the wizard OR by Project Genesis wire_stripe step.
+ *   ONE integration = ONE Connected Account. Multiple projects can share
+ *   this account (each project gets its own STRIPE_ACCOUNT_ID env var
+ *   pointing at it), OR each project can have its own account via
+ *   Project Genesis creating fresh accounts.
+ *
+ * business_type — captured during wizard, used at account creation.
+ * country — ISO 2-letter code, captured during wizard.
+ *
+ * NO M2M secret needed. Stripe Connect uses AI Connect's platform
+ * STRIPE_SECRET_KEY plus the Stripe-Account header per API call to
+ * act on behalf of the Connected Account. Nothing to vault per-user.
+ */
+export type StripeConfig = {
+  stripe_account_id: string;
+  business_type?: "individual" | "company";
+  country?: string;
+};
 export type IntegrationConfig =
   | SendGridConfig
   | OpenAiConfig
   | AnthropicConfig
   | WordPressConfig
   | OpenClawConfig
-  | Auth0Config;
+  | Auth0Config
+  | StripeConfig;
 
 /** Identity returned by the OpenClaw validator on success. Shaped to satisfy
  * IntegrationValidationResult.identity (Record<string, unknown>). */
@@ -73,6 +97,22 @@ export type Auth0Identity = {
   default_application_id?: string;
   default_application_name?: string;
   m2m_scopes_verified: string[]; // scopes the M2M cred actually has
+};
+
+/** Identity returned by the Stripe Connect validator on success. */
+export type StripeIdentity = {
+  account_id: string;
+  charges_enabled: boolean;
+  payouts_enabled: boolean;
+  details_submitted: boolean;
+  status: "pending" | "active" | "restricted";
+  country: string;
+  business_type?: string;
+  requirements_summary?: {
+    currently_due_count: number;
+    past_due_count: number;
+    disabled_reason?: string;
+  };
 };
 
 export type IntegrationValidationResult = {
@@ -94,6 +134,7 @@ export function isIntegrationType(value: unknown): value is IntegrationType {
     value === "anthropic" ||
     value === "wordpress" ||
     value === "openclaw" ||
-    value === "auth0"
+    value === "auth0" ||
+    value === "stripe"
   );
 }

@@ -16,11 +16,16 @@ import {
   OpenClawError,
 } from "../lib/integrations/openclawClient.js";
 import {
+  StripeError,
+  stripeConnectClient,
+} from "../lib/integrations/stripeClient.js";
+import {
   isIntegrationType,
   type Auth0Config,
   type IntegrationConfig,
   type IntegrationType,
   type OpenClawConfig,
+  type StripeConfig,
   type WordPressConfig,
 } from "../lib/integrations/types.js";
 import { isLocalMode, LOCAL_ONLY_ERROR } from "../lib/mode.js";
@@ -29,7 +34,7 @@ import {
   wordpressClient,
   type WordPressModule,
 } from "../lib/integrations/wordpressClient.js";
-import { logUserAction } from "../lib/logging.js";
+import { logSystem, logUserAction } from "../lib/logging.js";
 import { checkCanCreateIntegration } from "../lib/tiers.js";
 import {
   assertOrgAccess,
@@ -213,6 +218,41 @@ async function handleAddIntegration(
     // config is clean; the validator and routes prepend https:// themselves.
     const domain = domainRaw.replace(/^https?:\/\//, "").replace(/\/+$/, "");
     config = { domain, m2m_client_id: m2mClientId };
+  } else if (integrationType === "stripe") {
+    // Stripe Connect: no per-user credential (uses AI Connect's platform key
+    // + Stripe-Account header), so 'stripe' is NOT in credentialRequired. The
+    // config carries the Express Connected Account ID plus optional metadata.
+    const stripeAccountId = configIn.stripe_account_id;
+    if (typeof stripeAccountId !== "string" || stripeAccountId.length === 0) {
+      res.status(400).json({ error: "missing_stripe_account_id" });
+      return;
+    }
+    if (stripeAccountId.length > MAX_CREDENTIAL_CHARS) {
+      res.status(400).json({ error: "stripe_account_id_too_long" });
+      return;
+    }
+    const businessType = configIn.business_type;
+    if (
+      businessType !== undefined &&
+      businessType !== "individual" &&
+      businessType !== "company"
+    ) {
+      res.status(400).json({ error: "invalid_business_type" });
+      return;
+    }
+    const country = configIn.country;
+    if (
+      country !== undefined &&
+      (typeof country !== "string" || country.length !== 2)
+    ) {
+      res.status(400).json({ error: "invalid_country" });
+      return;
+    }
+    config = {
+      stripe_account_id: stripeAccountId,
+      ...(businessType ? { business_type: businessType } : {}),
+      ...(country ? { country } : {}),
+    };
   } else {
     // sendgrid — credential is the whole story.
     config = {};
@@ -1277,6 +1317,278 @@ async function handleSetAuth0DefaultApplication(
     .json({ success: true, default_application_id: applicationId });
 }
 
+// ============================================================
+// Stripe Connect (user projects' Express Connected Accounts)
+// ============================================================
+
+interface StripeTarget {
+  integration: { id: string };
+  config: StripeConfig;
+}
+
+// The frontend origin used to build Stripe onboarding refresh/return URLs.
+// Prefer the request's Origin header (localhost + preview deploys); fall back
+// to production. Mirrors the resolver in routes/subscription.ts.
+const DEFAULT_WEB_APP_URL = "https://aiconnect.macrotechtitan.com";
+
+function resolveOrigin(req: Request): string {
+  const origin = req.headers.origin;
+  return typeof origin === "string" && origin.length > 0
+    ? origin
+    : DEFAULT_WEB_APP_URL;
+}
+
+// Resolves the stripe integration for req.params.id (org- + user-scoped) and
+// asserts it is a validated 'stripe' integration. Writes the error response
+// and returns null on any failure. Mirrors resolveAuth0Target, minus the vault
+// read (Connect needs no per-user secret).
+async function resolveStripeTarget(
+  req: Request,
+  res: Response,
+): Promise<StripeTarget | null> {
+  const ctx = getCtx(req);
+  const integrationId = req.params.id;
+  if (typeof integrationId !== "string" || !UUID_RE.test(integrationId)) {
+    res.status(404).json({
+      error: "integration_not_found",
+      message: "Integration not found or does not belong to this user.",
+    });
+    return null;
+  }
+
+  const [row] = await getDb()
+    .select({
+      id: integrations.id,
+      integrationType: integrations.integrationType,
+      config: integrations.config,
+      status: integrations.status,
+    })
+    .from(integrations)
+    .where(
+      and(
+        orgScopeFilter(integrations, ctx),
+        eq(integrations.id, integrationId),
+        eq(integrations.userId, ctx.userId),
+      ),
+    )
+    .limit(1);
+
+  if (!row) {
+    res.status(404).json({
+      error: "integration_not_found",
+      message: "Integration not found or does not belong to this user.",
+    });
+    return null;
+  }
+  if (row.integrationType !== "stripe") {
+    res.status(400).json({
+      error: "wrong_integration_type",
+      message: `Integration is type '${row.integrationType}', expected 'stripe'.`,
+    });
+    return null;
+  }
+  if (row.status !== "validated") {
+    res.status(400).json({
+      error: "integration_not_validated",
+      message: `Integration has status '${row.status}'. Run validation first.`,
+    });
+    return null;
+  }
+
+  return { integration: { id: row.id }, config: row.config as StripeConfig };
+}
+
+// Maps a StripeError to an HTTP status. Anything non-StripeError is rethrown
+// for the global handler (matches handleAuth0Error).
+function handleStripeConnectError(err: unknown, res: Response): void {
+  if (err instanceof StripeError) {
+    const statusByCode: Record<string, number> = {
+      account_not_found: 404,
+      invalid_credentials: 500,
+      rate_limited: 429,
+      invalid_request: 400,
+      api_error: 502,
+      network_error: 502,
+    };
+    const status = statusByCode[err.code] ?? 502;
+    res.status(status).json({ error: err.code, message: err.message });
+    return;
+  }
+  throw err;
+}
+
+// Derives our three-state account status the same way the account.updated
+// webhook handler and the validator do.
+function deriveStripeAccountStatus(account: {
+  requirements?: { disabled_reason?: string | null } | null;
+  charges_enabled?: boolean;
+  payouts_enabled?: boolean;
+  details_submitted?: boolean;
+}): "pending" | "active" | "restricted" {
+  if (account.requirements?.disabled_reason) return "restricted";
+  if (
+    account.charges_enabled &&
+    account.payouts_enabled &&
+    account.details_submitted
+  ) {
+    return "active";
+  }
+  return "pending";
+}
+
+// POST /api/integrations/stripe/create-express-account — pre-wizard: creates a
+// new Express Connected Account (no integration row yet). The wizard then POSTs
+// /api/integrations with config.stripe_account_id to persist it.
+async function handleCreateStripeExpressAccount(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const ctx = getCtx(req);
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const { email, country, business_type: businessType } = body;
+
+  if (typeof email !== "string" || email.length === 0) {
+    res.status(400).json({
+      error: "email_required",
+      message: "email is required for Stripe Express account creation.",
+    });
+    return;
+  }
+  if (typeof country !== "string" || country.length !== 2) {
+    res.status(400).json({
+      error: "country_required",
+      message: "country is required (2-letter ISO code).",
+    });
+    return;
+  }
+  if (businessType !== "individual" && businessType !== "company") {
+    res.status(400).json({
+      error: "business_type_invalid",
+      message: 'business_type must be "individual" or "company".',
+    });
+    return;
+  }
+
+  try {
+    const account = await stripeConnectClient.createExpressAccount({
+      email,
+      country,
+      businessType,
+      projectId: "wizard-preprovision", // no project yet; wizard is standalone
+      userId: ctx.userId,
+    });
+
+    await logSystem("info", "stripe", "express_account_created_via_wizard", {
+      user_id: ctx.userId,
+      account_id: account.id,
+      country,
+      business_type: businessType,
+    });
+
+    res.status(201).json({
+      account_id: account.id,
+      country: account.country,
+      business_type: account.business_type,
+    });
+  } catch (err) {
+    handleStripeConnectError(err, res);
+  }
+}
+
+// POST /api/integrations/:id/stripe/onboarding-link — fresh Account Link for
+// Stripe's hosted onboarding.
+async function handleCreateStripeOnboardingLink(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const target = await resolveStripeTarget(req, res);
+  if (!target) return;
+
+  const origin = resolveOrigin(req);
+
+  try {
+    const link = await stripeConnectClient.createAccountLink({
+      accountId: target.config.stripe_account_id,
+      refreshUrl: `${origin}/settings/integrations?stripe_onboarding=refresh&integration_id=${target.integration.id}`,
+      returnUrl: `${origin}/settings/integrations?stripe_onboarding=complete&integration_id=${target.integration.id}`,
+    });
+
+    await logSystem("info", "stripe", "onboarding_link_created", {
+      integration_id: target.integration.id,
+      account_id: target.config.stripe_account_id,
+    });
+
+    res.json({ url: link.url, expires_at: link.expires_at });
+  } catch (err) {
+    handleStripeConnectError(err, res);
+  }
+}
+
+// POST /api/integrations/:id/stripe/dashboard-link — Login Link for the Express
+// Dashboard.
+async function handleCreateStripeDashboardLink(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const target = await resolveStripeTarget(req, res);
+  if (!target) return;
+
+  try {
+    const link = await stripeConnectClient.createLoginLink(
+      target.config.stripe_account_id,
+    );
+
+    await logSystem("info", "stripe", "dashboard_link_created", {
+      integration_id: target.integration.id,
+      account_id: target.config.stripe_account_id,
+    });
+
+    res.json({ url: link.url });
+  } catch (err) {
+    handleStripeConnectError(err, res);
+  }
+}
+
+// GET /api/integrations/:id/stripe/account — current Account details for the
+// management UI (Commit 12).
+async function handleGetStripeAccount(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const target = await resolveStripeTarget(req, res);
+  if (!target) return;
+
+  try {
+    const account = await stripeConnectClient.getAccount(
+      target.config.stripe_account_id,
+    );
+
+    res.json({
+      account_id: account.id,
+      charges_enabled: account.charges_enabled,
+      payouts_enabled: account.payouts_enabled,
+      details_submitted: account.details_submitted,
+      status: deriveStripeAccountStatus(account),
+      country: account.country,
+      business_type: account.business_type,
+      requirements: account.requirements
+        ? {
+            currently_due: account.requirements.currently_due ?? [],
+            past_due: account.requirements.past_due ?? [],
+            disabled_reason: account.requirements.disabled_reason ?? null,
+            current_deadline: account.requirements.current_deadline
+              ? new Date(
+                  account.requirements.current_deadline * 1000,
+                ).toISOString()
+              : null,
+          }
+        : null,
+    });
+  } catch (err) {
+    handleStripeConnectError(err, res);
+  }
+}
+
 export function registerIntegrationsRoutes(app: Express): void {
   app.post(
     "/api/integrations",
@@ -1390,5 +1702,33 @@ export function registerIntegrationsRoutes(app: Express): void {
     requireAuth,
     requireHydratedUser,
     handleSetAuth0DefaultApplication,
+  );
+
+  // Stripe Connect (user projects' Express Connected Accounts). The pre-wizard
+  // create route has no :id (the integration row doesn't exist yet); the other
+  // three operate on a validated 'stripe' integration via resolveStripeTarget.
+  app.post(
+    "/api/integrations/stripe/create-express-account",
+    requireAuth,
+    requireHydratedUser,
+    handleCreateStripeExpressAccount,
+  );
+  app.post(
+    "/api/integrations/:id/stripe/onboarding-link",
+    requireAuth,
+    requireHydratedUser,
+    handleCreateStripeOnboardingLink,
+  );
+  app.post(
+    "/api/integrations/:id/stripe/dashboard-link",
+    requireAuth,
+    requireHydratedUser,
+    handleCreateStripeDashboardLink,
+  );
+  app.get(
+    "/api/integrations/:id/stripe/account",
+    requireAuth,
+    requireHydratedUser,
+    handleGetStripeAccount,
   );
 }
