@@ -17,6 +17,7 @@ import {
 } from "../platforms/index.js";
 import * as vault from "../vault.js";
 import { wireAuth0ForProject } from "./auth0Wiring.js";
+import { wireStripeForProject } from "./stripeWiring.js";
 import {
   TEMPLATE_REPOS,
   type GenesisContext,
@@ -679,6 +680,38 @@ export async function wireAuth0(
   };
 }
 
+// --- step i: best-effort Stripe Connect wiring -----------------------------
+
+// Sprint 9: if the project creator has an active Stripe integration (validated +
+// include_in_projects), create an Express Connected Account for this project,
+// generate an onboarding link, and merge STRIPE_* into the Render env vars.
+//
+// BEST-EFFORT by design (identical contract to wire_auth0): ALWAYS returns
+// "succeeded" so a Stripe wiring failure (or a plain "no Stripe integration"
+// skip) never trips the orchestrator's rollback of the already-provisioned
+// project. The real outcome rides in details.stripe_wiring for the SSE stream /
+// UI. rollbackable: false; the Connected Account (if created) is left in place
+// for the user to complete onboarding or clean up.
+export async function wireStripe(
+  ctx: GenesisContext,
+): Promise<GenesisStepResult> {
+  const result = await wireStripeForProject({
+    userId: ctx.userId,
+    projectId: ctx.projectId,
+    projectName: ctx.name,
+    projectSlug: ctx.slug,
+    renderServiceId: ctx.results.create_render_service?.resourceId,
+    renderCredential: ctx.credentials.render,
+    userEmail: ctx.userEmail,
+  });
+
+  return {
+    status: "succeeded",
+    rollbackable: false,
+    details: { stripe_wiring: result },
+  };
+}
+
 // --- the ordered step list the orchestrator walks --------------------------
 
 // Execution order: GitHub first (Vercel + Render both depend on the repo);
@@ -694,4 +727,5 @@ export const GENESIS_STEPS: GenesisStep[] = [
   { name: "inject_env_vars", run: injectEnvVars },
   { name: "verify_deployment", run: verifyDeployment },
   { name: "wire_auth0", run: wireAuth0 },
+  { name: "wire_stripe", run: wireStripe },
 ];
