@@ -11,12 +11,20 @@ import { registerMeRoutes } from "./routes/me.js";
 import { registerPlatformCredentialsRoutes } from "./routes/platformCredentials.js";
 import { registerProjectsRoutes } from "./routes/projects.js";
 import { registerPromptRoutes } from "./routes/prompt.js";
+import { registerStripeWebhookRoutes } from "./routes/stripeWebhook.js";
 import { registerWordPressPluginRoutes } from "./routes/wordpressPlugin.js";
 
 const app = express();
 
 app.disable("x-powered-by");
 app.set("trust proxy", true);
+
+// Stripe webhook — MUST be registered BEFORE express.json(). Signature
+// verification needs the raw request body, and express.json() would consume
+// the stream and leave req.body a parsed object instead of a Buffer. The route
+// mounts its own express.raw() parser. See routes/stripeWebhook.ts.
+registerStripeWebhookRoutes(app);
+
 app.use(express.json({ limit: "1mb" }));
 
 const allowedOrigins = [
