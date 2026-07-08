@@ -30,6 +30,7 @@ import {
   type WordPressModule,
 } from "../lib/integrations/wordpressClient.js";
 import { logUserAction } from "../lib/logging.js";
+import { checkCanCreateIntegration } from "../lib/tiers.js";
 import {
   assertOrgAccess,
   orgScopeFilter,
@@ -121,6 +122,21 @@ async function handleAddIntegration(
   const integrationType = body.integration_type;
   if (!isIntegrationType(integrationType)) {
     res.status(400).json({ error: "invalid_integration_type" });
+    return;
+  }
+
+  // Feature gate: Free tier caps integration count and restricts which types
+  // are allowed. Enforced on CREATE only — existing integrations are never
+  // touched. Runs after auth (we have ctx.userId) and after the type is known.
+  const gate = await checkCanCreateIntegration(userId, integrationType);
+  if (gate) {
+    res.status(403).json({
+      error: "tier_upgrade_required",
+      message: gate.reason,
+      current_tier: gate.current_tier,
+      limit_hit: gate.limit_hit,
+      upgrade_url: "/settings/billing",
+    });
     return;
   }
 

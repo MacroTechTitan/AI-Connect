@@ -16,6 +16,7 @@ import {
 } from "../lib/orgScope.js";
 import type { Platform } from "../lib/platforms/index.js";
 import { deriveSlugFromText } from "../lib/slug.js";
+import { checkCanCreateProject } from "../lib/tiers.js";
 import {
   requireAuth,
   requireHydratedUser,
@@ -171,6 +172,21 @@ async function handleCreateProject(
     return;
   }
   const organizationId = ctx.organizationId;
+
+  // Feature gate: Free tier is limited to 1 project. Enforced on CREATE only —
+  // existing projects are never touched. A downgraded Pro user keeps their
+  // projects but can't create more.
+  const gate = await checkCanCreateProject(ctx.userId);
+  if (gate) {
+    res.status(403).json({
+      error: "tier_upgrade_required",
+      message: gate.reason,
+      current_tier: gate.current_tier,
+      limit_hit: gate.limit_hit,
+      upgrade_url: "/settings/billing",
+    });
+    return;
+  }
 
   const body = parseBody(req, res);
   if (!body) return;
