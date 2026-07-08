@@ -1,9 +1,35 @@
+/**
+ * Stripe webhook handler.
+ *
+ * IMPORTANT: This single endpoint handles BOTH:
+ * - Stripe Standard events (checkout, subscription, invoice) — for
+ *   AI Connect's own paid tier billing
+ * - Stripe Connect events (account.updated, etc.) — for user
+ *   projects' Connected Accounts
+ *
+ * In Stripe Dashboard, create TWO webhook endpoints, both pointing
+ * at /api/stripe/webhook:
+ * 1. Standard endpoint — subscribes to checkout.session.completed,
+ *    customer.subscription.updated, customer.subscription.deleted,
+ *    invoice.payment_failed. Uses STRIPE_WEBHOOK_SECRET.
+ * 2. Connect endpoint — subscribes to account.updated. This uses
+ *    a SEPARATE webhook secret (STRIPE_CONNECT_WEBHOOK_SECRET) —
+ *    Stripe verifies Connect events with a distinct signature.
+ *
+ * v1 implementation uses only STRIPE_WEBHOOK_SECRET and treats all
+ * events as Standard events. Connect webhook signature verification
+ * with a separate secret is deferred to Sprint 9.5+ if we discover
+ * it's actually needed. Per Stripe docs, if you configure both event
+ * types on ONE endpoint in Dashboard, the same secret works — which
+ * is our target setup.
+ */
+
 import { eq } from "drizzle-orm";
 import express, { type Express, type Request, type Response } from "express";
 import type Stripe from "stripe";
 
 import { getDb } from "../db/client.js";
-import { stripeWebhookEvents, subscriptions } from "../db/schema.js";
+import { projects, stripeWebhookEvents, subscriptions } from "../db/schema.js";
 import {
   StripeError,
   stripeStandardClient,
@@ -211,18 +237,10 @@ async function routeStripeEvent(event: Stripe.Event): Promise<void> {
       break;
 
     // ============================================================
-    // Stripe Connect events — Commit 6 wires these up
+    // Stripe Connect events (user projects' Connected Accounts)
     // ============================================================
     case "account.updated":
-      // Commit 6: handleAccountUpdated
-      await logSystem(
-        "info",
-        "stripe_webhook",
-        "account_updated_not_yet_handled",
-        {
-          event_id: event.id,
-        },
-      );
+      await handleAccountUpdated(event.data.object as Stripe.Account);
       break;
 
     default:
@@ -414,6 +432,96 @@ async function handleInvoicePaymentFailed(
       updatedAt: new Date(),
     })
     .where(eq(subscriptions.stripeSubscriptionId, subscriptionId));
+}
+
+// ============================================================
+// Stripe Connect event handlers
+// ============================================================
+
+/**
+ * Maps a Stripe Account object to our stripe_account_status enum.
+ * Logic:
+ * - If disabled_reason is set → 'restricted' (Stripe blocked the account)
+ * - Else if charges_enabled + payouts_enabled + details_submitted → 'active'
+ * - Otherwise → 'pending' (still onboarding or missing capabilities)
+ */
+function mapAccountStatus(
+  account: Stripe.Account,
+): "pending" | "active" | "restricted" {
+  if (account.requirements?.disabled_reason) {
+    return "restricted";
+  }
+  if (
+    account.charges_enabled === true &&
+    account.payouts_enabled === true &&
+    account.details_submitted === true
+  ) {
+    return "active";
+  }
+  return "pending";
+}
+
+/**
+ * account.updated:
+ * Fires when a Connected Account's state changes. Sync the derived
+ * status to projects.stripe_account_status.
+ *
+ * The Connected Account may map to zero, one, or many projects.
+ * Zero projects means the account was created outside our normal
+ * flow (e.g., via API testing) — log and skip.
+ * Many projects would mean the same account is wired to multiple
+ * projects, which shouldn't happen with our create-per-project
+ * approach, but we handle it defensively by updating all matches.
+ */
+async function handleAccountUpdated(account: Stripe.Account): Promise<void> {
+  const db = getDb();
+  const newStatus = mapAccountStatus(account);
+
+  // Find projects wired to this Connected Account
+  const matches = await db
+    .select({ id: projects.id, currentStatus: projects.stripeAccountStatus })
+    .from(projects)
+    .where(eq(projects.stripeAccountId, account.id));
+
+  if (matches.length === 0) {
+    await logSystem(
+      "info",
+      "stripe_webhook",
+      "account_updated_no_project_match",
+      {
+        stripe_account_id: account.id,
+        new_status: newStatus,
+      },
+    );
+    return;
+  }
+
+  // Update all matching projects
+  await db
+    .update(projects)
+    .set({
+      stripeAccountStatus: newStatus,
+      updatedAt: new Date(),
+    })
+    .where(eq(projects.stripeAccountId, account.id));
+
+  await logSystem("info", "stripe_webhook", "account_updated_synced", {
+    stripe_account_id: account.id,
+    new_status: newStatus,
+    project_count: matches.length,
+    // Log transitions for observability
+    transitions: matches.map((m) => ({
+      project_id: m.id,
+      from: m.currentStatus,
+      to: newStatus,
+    })),
+  });
+
+  // If any project transitioned to 'active' for the first time,
+  // that's a good signal for future features (welcome email,
+  // "your payments are live" notification). Sprint 10+.
+  // If any transitioned to 'restricted', that's a red flag —
+  // Sprint 10+ notification path.
 }
 
 /**

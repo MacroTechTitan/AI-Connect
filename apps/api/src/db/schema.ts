@@ -133,6 +133,11 @@ export const projects = pgTable(
     subdomainIdx: index("idx_projects_subdomain")
       .on(table.subdomain)
       .where(sql`${table.subdomain} IS NOT NULL`),
+    // Sprint 9: the account.updated webhook looks up projects by their Stripe
+    // Connected Account ID; index it so the sync isn't a full table scan.
+    stripeAccountIdIdx: index("projects_stripe_account_id_idx")
+      .on(table.stripeAccountId)
+      .where(sql`${table.stripeAccountId} IS NOT NULL`),
   }),
 );
 
