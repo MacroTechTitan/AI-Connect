@@ -12,7 +12,10 @@ import { Auth0ApplicationManager } from "./components/Auth0ApplicationManager";
 import { Auth0Wizard } from "./components/Auth0Wizard";
 import { OpenClawAgentManager } from "./components/OpenClawAgentManager";
 import { OpenClawWizard } from "./components/OpenClawWizard";
+import { PricingPage } from "./components/PricingPage";
 import { SessionExpiredNotice } from "./components/SessionExpiredNotice";
+import { SubscriptionPanel } from "./components/SubscriptionPanel";
+import { UpgradePromptModal } from "./components/UpgradePromptModal";
 import { WordPressModuleManager } from "./components/WordPressModuleManager";
 import { WordPressWizard } from "./components/WordPressWizard";
 import {
@@ -25,6 +28,11 @@ import {
 type HealthStatus = "pending" | "ok" | "down";
 type Provider = "anthropic" | "openai" | "ollama";
 type Platform = "vercel" | "render" | "github" | "supabase";
+
+// Invoked when a create request is rejected with 403 tier_upgrade_required, so
+// the app can surface the UpgradePromptModal. Wired from IntegrationsPanel and
+// ProjectsPanel up to App.
+type TierLimitHandler = (reason: string, limitHit: string) => void;
 
 const HEALTH_URL = "https://api.aiconnect.macrotechtitan.com/health";
 const CHANGELOG_URL =
@@ -736,8 +744,10 @@ function describeIntegrationIdentity(
 
 function IntegrationsPanel({
   getAccessTokenSilently,
+  onTierLimit,
 }: {
   getAccessTokenSilently: GetAccessToken;
+  onTierLimit?: TierLimitHandler;
 }) {
   const [integrations, setIntegrations] = useState<Integration[] | null>(null);
   // Provider keys, loaded for the openai/anthropic dropdowns and to resolve
@@ -923,6 +933,26 @@ function IntegrationsPanel({
         setAddError(
           `You already have a ${INTEGRATION_LABEL[addType]} integration. Remove it first to add another.`,
         );
+        return;
+      }
+
+      // Free-tier limit hit — surface the upgrade prompt instead of an inline
+      // error. The API returns { error: 'tier_upgrade_required', message,
+      // limit_hit }.
+      if (res.status === 403 && onTierLimit) {
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          message?: string;
+          limit_hit?: string;
+        };
+        if (body.error === "tier_upgrade_required") {
+          onTierLimit(
+            body.message ?? "You've hit a Free plan limit.",
+            body.limit_hit ?? "",
+          );
+          return;
+        }
+        setAddError(body.message ?? "Please check your input.");
         return;
       }
 
@@ -1836,8 +1866,10 @@ interface ProjectRow {
 
 function ProjectsPanel({
   getAccessTokenSilently,
+  onTierLimit,
 }: {
   getAccessTokenSilently: GetAccessToken;
+  onTierLimit?: TierLimitHandler;
 }) {
   const [projects, setProjects] = useState<ProjectRow[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -1923,6 +1955,27 @@ function ProjectsPanel({
         },
         getAccessTokenSilently,
       );
+
+      // Free-tier limit hit — surface the upgrade prompt instead of an inline
+      // error. The API returns { error: 'tier_upgrade_required', message,
+      // limit_hit }.
+      if (res.status === 403 && onTierLimit) {
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          message?: string;
+          limit_hit?: string;
+        };
+        if (body.error === "tier_upgrade_required") {
+          onTierLimit(
+            body.message ?? "You've hit a Free plan limit.",
+            body.limit_hit ?? "",
+          );
+          return;
+        }
+        setAddError(body.message ?? "Couldn't create project.");
+        return;
+      }
+
       if (!res.ok) {
         let msg =
           res.status >= 500
@@ -2380,6 +2433,14 @@ export function App() {
   const [me, setMe] = useState<MeShape | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
+  // Set when a create request hits a Free-tier limit; drives the upgrade modal.
+  const [upgradePrompt, setUpgradePrompt] = useState<{
+    reason: string;
+    limitHit: string;
+  } | null>(null);
+  const handleTierLimit = useCallback<TierLimitHandler>((reason, limitHit) => {
+    setUpgradePrompt({ reason, limitHit });
+  }, []);
   const {
     isAuthenticated,
     isLoading,
@@ -2544,8 +2605,13 @@ export function App() {
         {isAuthenticated && showSettings ? (
           <section className="settings-block">
             <h2>Settings</h2>
+            <SubscriptionPanel
+              getAccessTokenSilently={getAccessTokenSilently}
+            />
+            <PricingPage getAccessTokenSilently={getAccessTokenSilently} />
             <ProjectsPanel
               getAccessTokenSilently={getAccessTokenSilently}
+              onTierLimit={handleTierLimit}
             />
             <PlatformCredentialsPanel
               getAccessTokenSilently={getAccessTokenSilently}
@@ -2553,12 +2619,22 @@ export function App() {
             <KeysPanel getAccessTokenSilently={getAccessTokenSilently} />
             <IntegrationsPanel
               getAccessTokenSilently={getAccessTokenSilently}
+              onTierLimit={handleTierLimit}
             />
             <PromptTester
               getAccessTokenSilently={getAccessTokenSilently}
             />
           </section>
         ) : null}
+
+        {/* Fired when a Free user hits a tier limit anywhere in Settings. */}
+        <UpgradePromptModal
+          open={upgradePrompt !== null}
+          onClose={() => setUpgradePrompt(null)}
+          reason={upgradePrompt?.reason ?? ""}
+          limitHit={upgradePrompt?.limitHit ?? ""}
+          getAccessTokenSilently={getAccessTokenSilently}
+        />
 
         <section className="devs">
           <h2>For developers — what AI Connect actually does</h2>
