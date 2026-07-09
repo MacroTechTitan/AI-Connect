@@ -478,6 +478,98 @@ NOT YET EXECUTED. Sprint 8 shipped from a code perspective; live verification aw
 - AI Connect's own internal management UIs (Auth0 tenants, Stripe subscriptions) — admin conveniences
 - Sprint 8.5 items (auto-redeploy, multi-tenant Auth0, real audience, delete UX, search/filter)
 
+## Sprint 9 — Stripe Connect + AI Connect Paid Tier (2026-06-24)
+- Branch: sprint/9-stripe-connect-and-paid-tier
+- Merged via PR #16 on 2026-06-24
+- 14 commits
+
+### What shipped
+
+Two intertwined tracks:
+- **Track A** — AI Connect's own paid tier launched (Stripe Standard). Free ($0) + Pro ($49/mo) with real feature gates + real Stripe billing + real subscription lifecycle.
+- **Track B** — Stripe Connect connector for user projects (Stripe Express). When Project Genesis provisions a project, AI Connect can create a Stripe Express Connected Account and sync STRIPE_* env vars so the project can accept payments day one.
+
+Both tracks share the same webhook infrastructure (single /api/stripe/webhook endpoint routes both Standard and Connect events).
+
+### Migrations
+- 0010: subscriptions table (user_id unique, stripe_customer_id, stripe_subscription_id, tier CHECK 'free'/'pro', status CHECK 5 values, current_period_end, cancel_at_period_end)
+- 0011: integration_type CHECK extended to 'stripe', projects.stripe_account_id + stripe_account_status columns, stripe_webhook_events table (PK = Stripe event.id for idempotency via PG conflict on INSERT)
+- 0012: partial btree index on projects.stripe_account_id (matches existing convention for nullable columns like idx_projects_subdomain)
+- All three migrations applied to AI Connect Supabase manually via SQL editor per established pattern.
+
+### Backend
+- apps/api/src/lib/integrations/stripeClient.ts — Stripe SDK 22.3.0 wrapper. Two client classes sharing one lazily-instantiated Stripe instance. StripeStandardClient (getOrCreateCustomer idempotent by metadata.ai_connect_user_id, createCheckoutSession, createCustomerPortalSession, getSubscription, cancelSubscription, constructWebhookEvent). StripeConnectClient (createExpressAccount, createAccountLink, createLoginLink, getAccount). SDK 22 adaptations required: subscription.current_period_end reads from items.data[0].current_period_end (removed from top level in v18+), invoice.parent.subscription_details.subscription (also removed from top level).
+- apps/api/src/routes/stripeWebhook.ts — POST /api/stripe/webhook mounted with express.raw({type:'application/json'}) BEFORE express.json() so signature verification has the raw body. Idempotency via PK conflict detection (PG error code 23505). mapStripeStatus guard collapses unexpected Stripe statuses to 'active' to avoid CHECK violations. Standard handlers: checkout.session.completed, customer.subscription.updated, customer.subscription.deleted, invoice.payment_failed. Connect handler: account.updated with mapAccountStatus deriving pending/active/restricted from charges_enabled + payouts_enabled + details_submitted + requirements.disabled_reason.
+- apps/api/src/lib/tiers.ts — FEATURE_LIMITS constants (Free: 2 integrations, 1 project, allowed types [sendgrid, wordpress]; Pro: unlimited, all types). getTierForUser with lazy bootstrap safety net. countUserIntegrations / countUserProjects for gate enforcement. checkCanCreateIntegration / checkCanCreateProject return typed blocked results with limit_hit code. requireTier(tier) Express middleware factory (available for future use, not applied to any route in v1).
+- apps/api/src/scripts/bootstrapSubscriptions.ts — one-shot idempotent script that grandfathers all existing users to Pro (tier='pro', status='active', both Stripe IDs NULL). Run at Sprint 9 deploy time.
+- Feature gates wired into POST /api/integrations (handleAddIntegration) and POST /api/projects (handleCreateProject) at the single choke points before any real work.
+- apps/api/src/routes/subscription.ts — four routes: POST /api/subscription/checkout (creates hosted Checkout Session, reuses existing Stripe Customer via metadata.ai_connect_user_id idempotency), POST /api/subscription/portal (Customer Portal for self-service management), GET /api/subscription (returns tier/status/current_period_end/cancel_at_period_end/is_grandfathered/has_stripe_customer), POST /api/subscription/cancel (schedules cancellation at period end). All require requireAuth + requireHydratedUser. StripeError mapped via handleStripeError.
+- apps/api/src/lib/integrations/types.ts — IntegrationType extended with 'stripe', StripeConfig (stripe_account_id + optional business_type + country), StripeIdentity (charges_enabled/payouts_enabled/details_submitted/derived status/country/business_type/requirements_summary). Stripe Connect uses AI Connect's platform key + Stripe-Account header per API call — no per-user vault secret. 'stripe' NOT in credentialRequired.
+- apps/api/src/lib/integrations/validators/stripe.ts — verifies account exists via getAccount, derives status same way webhook handler does.
+- Four Stripe Connect routes: POST /api/integrations/stripe/create-express-account (pre-wizard account creation, no integration ID yet), POST /api/integrations/:id/stripe/onboarding-link, POST /api/integrations/:id/stripe/dashboard-link (Express Dashboard access), GET /api/integrations/:id/stripe/account. All use resolveStripeTarget for org scoping + type/status validation. Shared deriveStripeAccountStatus helper across validator and GET route.
+- apps/api/src/lib/genesis/stripeWiring.ts — wire_stripe genesis step. Creates NEW Express Connected Account per project (payment isolation — each project gets its own account). Persists stripe_account_id + status='pending' to projects row. Generates onboarding link. Syncs STRIPE_ACCOUNT_ID + STRIPE_PUBLISHABLE_KEY (NOT STRIPE_SECRET_KEY — platform key must never be given to user projects) to Render env via get→merge→put pattern (same as Sprint 8 wire_auth0). Best-effort with typed StripeWiringResult (6 failure modes with partial recovery info: no_integration, integration_not_validated, stripe_account_creation_failed, onboarding_link_creation_failed, render_env_sync_failed, db_update_failed). Genesis step always returns status='succeeded' with details.stripe_wiring — never triggers project rollback. userEmail added to GenesisContext to support account creation.
+
+### Frontend
+- PricingPage.tsx — Free vs Pro side-by-side Cards. Free ($0): 2 integrations, 1 project, WordPress + SendGrid. Pro ($49/mo): unlimited + all connectors including OpenClaw, Auth0, Stripe. Upgrade CTA hits /api/subscription/checkout → redirect to Stripe hosted page. Handles regular Free users and grandfathered Pro (who can "Convert to paid").
+- SubscriptionPanel.tsx — three tier variants (Free / grandfathered Pro / paying Pro). Shows usage counts, renew date, cancel-at-period-end status, past_due warnings. Manage subscription opens Stripe Customer Portal. Cancel subscription opens confirmation Modal → POST /api/subscription/cancel.
+- UpgradePromptModal.tsx — fires on 403 tier_upgrade_required response. Context-aware copy per limit_hit code (max_integrations, max_projects, integration_type_not_allowed). CTA routes through checkout.
+- Shared apps/web/src/lib/subscription.ts — fetchSubscription/startCheckout/openPortal/cancelSubscription/formatPeriodEnd on the authedFetch bearer token model. Prevents duplication across the three components.
+- App.tsx: Settings gains billing UI at top (SubscriptionPanel + PricingPage). handleTierLimit callback threaded into IntegrationsPanel + ProjectsPanel — their create flows detect 403 tier_upgrade_required and open UpgradePromptModal at App level. (No global fetch wrapper exists; centralizable to a fetch interceptor in Sprint 10+.)
+- StripeWizard.tsx — 5-step wizard (Welcome, Business Info, Create Account, Save, Onboarding) built on Sprint 8 design system primitives. Steps 3-5 use hideFooter with contextual inline actions matching Auth0Wizard. onConnected/onManageAccount handoff pattern.
+- StripeAccountManager.tsx — single-pane panel. Status Badge (pending/active/restricted). Account ID copyable, country, business type, charges/payouts/details submitted flags. Status-specific primary actions: pending → Continue Onboarding, restricted → Complete Requirements + reasons list, active → Open Express Dashboard. Refresh + Close.
+- App.tsx: 'stripe' added to IntegrationsPanel type selector, describeIntegrationIdentity case, wizard/manager rendering with onManageAccount handoff. Test Connection extended to GET /:id/stripe/account and surface account status inline.
+
+### Docs
+- docs/STRIPE_CONNECTOR.md — user-facing guide. Two sections: (a) Upgrading AI Connect to Pro (checkout flow, Customer Portal, cancellation, grandfathering, payment failure handling), (b) Stripe Connect for your projects (setup wizard, Project Genesis auto-wiring behavior, env vars synced/not synced, best-effort semantics, deploy-timing caveat, Account Manager operations). Security model + deferred items.
+- docs/BILLING.md — admin/developer reference. Architecture, getTierForUser + lazy bootstrap, FEATURE_LIMITS, bootstrap script, manual tier-adjustment SQL, webhook internals (raw body / signature verification / idempotency / event handlers), Stripe Dashboard setup, env vars, Stripe CLI + e2e testing, troubleshooting.
+- docs/sprints/SPRINT_9_TESTING.md — nine sections (A: Grandfathering, B: Free tier limits, C: Pro upgrade flow with real Stripe test-mode, D: Customer Portal, E: Downgrade, F: Stripe Connect wizard, G: Project Genesis Stripe wiring, H: Webhook resilience, I: Cross-cutting including 4 wizards consistent, cloud/local mode, Sprint 6-8 regression).
+
+### Why this matters
+
+Sprint 9 is AI Connect's monetization milestone. Before Sprint 9, AI Connect provided value for free with no path to revenue. After Sprint 9, there's a real subscription flow: Free tier that demonstrates the product, Pro tier that captures paying users, and Stripe Connect that lets AI Connect's provisioned projects accept payments day one (which is a genuine differentiator versus alternatives like Vercel + manual Stripe setup). The two tracks validate each other: dogfooding the paid tier proves the Stripe Standard integration works before other users see it; Stripe Connect connector shares the webhook infrastructure and best-effort Genesis wiring pattern established in Sprint 8. This is the first sprint where AI Connect is production-ready as a real product, not just an internal tool.
+
+### Smoke test (deferred to first opportunity)
+
+Sprint 9 smoke test plan documented in docs/sprints/SPRINT_9_TESTING.md. Nine sections covering grandfathering, Free tier limits, Pro upgrade flow with real Stripe test-mode, Customer Portal, downgrade, Stripe Connect wizard, Project Genesis Stripe wiring, webhook resilience, cross-cutting consistency across all four wizards.
+
+NOT YET EXECUTED. Sprint 9 shipped from a code perspective; live verification awaits a session with Stripe test-mode credentials (STRIPE_SECRET_KEY sk_test_, STRIPE_WEBHOOK_SECRET, STRIPE_PRO_PRICE_ID pointing at a test Product/Price, Stripe CLI installed). Same "deferred smoke test" pattern as Sprints 7 and 8.
+
+### What's NOT done (deferred to Sprint 10+)
+
+- Smoke test execution (needs Stripe test-mode setup)
+- Auto-redeploy Render service after AUTH0_* / STRIPE_* env sync (env vars only take effect on next deploy currently) — Sprint 10
+- Per-project Stripe Restricted Keys instead of publishable-key-only sync — Sprint 10+
+- Reusing existing Stripe Connected Accounts across projects (currently creates fresh per project) — Sprint 10+
+- Test charges / payment intent testing from AI Connect UI — Sprint 10+
+- Custom Stripe onboarding UI (currently uses hosted) — Sprint 10+
+- Multi-account per Stripe integration — Sprint 10+
+- Country whitelist / validation (currently trusts user input) — Sprint 10+
+- Refund UI — Sprint 10+
+- Invoice / payment history display in AI Connect (Stripe Portal handles externally) — Sprint 10+
+- Team / Enterprise tiers beyond Free + Pro — Sprint 10+
+- Annual billing option — Sprint 10+
+- Promo codes / discounts / trial periods — Sprint 10+
+- Multi-tenant Auth0 support — Sprint 10+
+- Real per-project AUTH0_AUDIENCE (currently placeholder) — Sprint 10+
+- Auth0 user management, connections config, Actions/Rules, Universal Login branding — Sprint 10+
+- Delete Auth0/Stripe application/account UX — Sprint 10+
+- Search/filter in application/account managers — Sprint 10+
+- Full theme switcher — Sprint 10+
+- Storybook proper — Sprint 10+
+- Deeper accessibility work: screen reader announcements, ARIA on icon-only buttons, high contrast, reduced motion — Sprint 10+
+- AI Connect's own internal management UIs (admin dashboards) — Sprint 10 or later
+- Help center / user manual — Sprint 10 or later
+- Global fetch wrapper to centralize 403 tier_upgrade_required handling — Sprint 10+
+
+### Sprint 10 candidates locked from conversation
+
+- Sprint 8.5 items (auto-redeploy, multi-tenant Auth0, real audience, delete UX, search/filter)
+- Sprint 9.5 items (auto-redeploy Stripe, embedded Stripe Elements, per-project Restricted Keys)
+- Help center / user manual (in-app docs)
+- AI Connect's own internal management UIs (Auth0 tenants, Stripe subscriptions) — admin conveniences
+- Message history persistence for OpenClaw (Sprint 7 deferral)
+- Deeper accessibility work
+
 ---
 
 *Last updated: 2026-06-24*
