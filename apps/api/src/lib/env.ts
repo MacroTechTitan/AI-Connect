@@ -12,10 +12,16 @@ const envSchema = z.object({
   AUTH0_ISSUER_BASE_URL: z.string().url().optional(),
   AUTH0_AUDIENCE: z.string().optional(),
 
-  // Stripe — test mode in Sprint 0. No products yet, just env wiring.
+  // Stripe — Sprint 9 wires the paid tier + Connect connector. Required in
+  // production, optional in dev so /health (and local mode) boot without them.
+  // See lib/integrations/stripeClient.ts — the SDK is lazily instantiated and
+  // only throws on first use if STRIPE_SECRET_KEY is missing.
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_PUBLISHABLE_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  // The Stripe Price ID for the $49/mo Pro tier. Created manually in the
+  // Stripe Dashboard, not by AI Connect. Read by the subscription checkout route.
+  STRIPE_PRO_PRICE_ID: z.string().optional(),
 
   // Sprint 2 placeholder. 32-byte hex string. Generate with openssl rand -hex 32.
   MASTER_KEY: z.string().length(64).optional(),

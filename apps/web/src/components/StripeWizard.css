@@ -1,0 +1,49 @@
+/* Layout helpers for the Stripe wizard step content. The structural chrome
+ * (modal, step indicator, footer, buttons, inputs, cards) comes from the
+ * design-system primitives; these classes only arrange the per-step body. */
+.sw-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-3);
+}
+.sw-muted {
+  margin: 0;
+  font-size: var(--ai-text-sm);
+  opacity: 0.7;
+}
+.sw-error {
+  margin: 0;
+  font-size: var(--ai-text-sm);
+  color: var(--ai-color-error-bg);
+}
+.sw-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ai-space-2);
+  flex-wrap: wrap;
+}
+.sw-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-1);
+}
+.sw-field-label {
+  font-size: var(--ai-text-sm);
+  font-weight: var(--ai-weight-medium);
+}
+.sw-radios {
+  display: flex;
+  gap: var(--ai-space-4);
+}
+.sw-radio {
+  display: flex;
+  align-items: center;
+  gap: var(--ai-space-2);
+  font-size: var(--ai-text-sm);
+  cursor: pointer;
+}
+/* Wrap the primary onboarding CTA (an anchor to Stripe's hosted flow) so the
+ * button inside stretches naturally without underline decoration. */
+.sw-onboard-link {
+  text-decoration: none;
+}

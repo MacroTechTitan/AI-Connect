@@ -85,6 +85,13 @@ export const projects = pgTable(
     // create_render_service time and shown in the frontend. NULL until the
     // Render service is created.
     deployedUrl: text("deployed_url"),
+    // Sprint 9: the Stripe Express Connected Account ID (e.g. 'acct_1AbC...')
+    // created for this project's Stripe wiring. NULL for projects without
+    // Stripe wiring. Stripe IDs live in Stripe's API, so no FK here.
+    stripeAccountId: text("stripe_account_id"),
+    // Sprint 9: reflects the Connect account.updated webhook state. NULL until
+    // a Stripe account is wired.
+    stripeAccountStatus: text("stripe_account_status"),
     // References a vault.secrets entry holding the project's Supabase Postgres
     // connection string. NULL until create_supabase_project captures it.
     databaseConnectionStringVaultId: uuid("database_connection_string_vault_id"),
@@ -107,6 +114,10 @@ export const projects = pgTable(
       "projects_template_choice_check",
       sql`${table.templateChoice} IN ('html-js', 'sveltekit', 'nextjs')`,
     ),
+    stripeAccountStatusCheck: check(
+      "projects_stripe_account_status_check",
+      sql`${table.stripeAccountStatus} IS NULL OR ${table.stripeAccountStatus} IN ('pending', 'active', 'restricted')`,
+    ),
     organizationIdIdx: index("idx_projects_organization_id").on(
       table.organizationId,
     ),
@@ -122,6 +133,11 @@ export const projects = pgTable(
     subdomainIdx: index("idx_projects_subdomain")
       .on(table.subdomain)
       .where(sql`${table.subdomain} IS NOT NULL`),
+    // Sprint 9: the account.updated webhook looks up projects by their Stripe
+    // Connected Account ID; index it so the sync isn't a full table scan.
+    stripeAccountIdIdx: index("projects_stripe_account_id_idx")
+      .on(table.stripeAccountId)
+      .where(sql`${table.stripeAccountId} IS NOT NULL`),
   }),
 );
 
@@ -464,7 +480,7 @@ export const integrations = pgTable(
   (table) => ({
     integrationTypeCheck: check(
       "integrations_integration_type_check",
-      sql`${table.integrationType} IN ('sendgrid', 'openai', 'anthropic', 'wordpress', 'openclaw', 'auth0')`,
+      sql`${table.integrationType} IN ('sendgrid', 'openai', 'anthropic', 'wordpress', 'openclaw', 'auth0', 'stripe')`,
     ),
     statusCheck: check(
       "integrations_status_check",
@@ -515,3 +531,85 @@ export const projectProvisioningEvents = pgTable(
       .where(sql`${table.status} IN ('pending', 'in_progress')`),
   }),
 );
+
+export const subscriptions = pgTable(
+  "subscriptions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id").references(
+      () => organizations.id,
+      { onDelete: "set null" },
+    ),
+    // Nullable: grandfathered users have neither stripe ID; Free users may have
+    // a customer record but no subscription yet.
+    stripeCustomerId: text("stripe_customer_id"),
+    stripeSubscriptionId: text("stripe_subscription_id"),
+    tier: text("tier").notNull().default("free"),
+    status: text("status").notNull().default("active"),
+    currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
+    cancelAtPeriodEnd: boolean("cancel_at_period_end")
+      .notNull()
+      .default(false),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    // One subscription per user in v1.
+    userIdUnique: unique("subscriptions_user_id_unique").on(table.userId),
+    stripeCustomerIdUnique: unique(
+      "subscriptions_stripe_customer_id_unique",
+    ).on(table.stripeCustomerId),
+    stripeSubscriptionIdUnique: unique(
+      "subscriptions_stripe_subscription_id_unique",
+    ).on(table.stripeSubscriptionId),
+    tierCheck: check(
+      "subscriptions_tier_check",
+      sql`${table.tier} IN ('free', 'pro')`,
+    ),
+    statusCheck: check(
+      "subscriptions_status_check",
+      sql`${table.status} IN ('active', 'past_due', 'canceled', 'incomplete', 'trialing')`,
+    ),
+  }),
+);
+
+export type SubscriptionRow = typeof subscriptions.$inferSelect;
+export type NewSubscription = typeof subscriptions.$inferInsert;
+
+export const stripeWebhookEvents = pgTable(
+  "stripe_webhook_events",
+  {
+    // Stripe's event.id (e.g. 'evt_1AbCdE...'). Natural key: PK conflict on
+    // INSERT means a duplicate delivery, safe to skip.
+    id: text("id").primaryKey(),
+    eventType: text("event_type").notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    // false = received but handler failed (allows retry); true = processed OK.
+    processed: boolean("processed").notNull().default(false),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    // Last handler error message, for observability.
+    processingError: text("processing_error"),
+    // Full event payload for audit/replay if needed.
+    payload: jsonb("payload").notNull(),
+  },
+  (table) => ({
+    eventTypeIdx: index("stripe_webhook_events_event_type_idx").on(
+      table.eventType,
+    ),
+    receivedAtIdx: index("stripe_webhook_events_received_at_idx").on(
+      table.receivedAt,
+    ),
+  }),
+);
+
+export type StripeWebhookEventRow = typeof stripeWebhookEvents.$inferSelect;
+export type NewStripeWebhookEvent = typeof stripeWebhookEvents.$inferInsert;

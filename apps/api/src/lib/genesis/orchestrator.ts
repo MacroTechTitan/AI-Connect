@@ -5,6 +5,7 @@ import {
   platformCredentials,
   projectProvisioningEvents,
   projects,
+  users,
 } from "../../db/schema.js";
 import { logSystem } from "../logging.js";
 import {
@@ -334,6 +335,16 @@ async function buildContext(
     .from(platformCredentials)
     .where(eq(platformCredentials.userId, project.createdByUserId));
 
+  // The creator's email, needed by the best-effort wire_stripe step (Stripe
+  // Express account creation requires it). createdByUserId FK is ON DELETE
+  // restrict, so the user row exists; default to "" defensively.
+  const [creator] = await db
+    .select({ email: users.email })
+    .from(users)
+    .where(eq(users.id, project.createdByUserId))
+    .limit(1);
+  const userEmail = creator?.email ?? "";
+
   const secretIdByPlatform = new Map<string, string>();
   for (const row of credRows) {
     // Keep the first credential seen per platform (rows are unordered; Sprint 4
@@ -400,6 +411,7 @@ async function buildContext(
     organizationId: project.organizationId,
     name: project.name,
     slug: project.slug,
+    userEmail,
     // Legacy field retained from Sprint 4; superseded by templateChoice below.
     templateRepoUrl: "",
     // Sprint 5: the GitHub step generates from this template (or falls back to

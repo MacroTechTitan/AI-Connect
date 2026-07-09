@@ -12,7 +12,12 @@ import { Auth0ApplicationManager } from "./components/Auth0ApplicationManager";
 import { Auth0Wizard } from "./components/Auth0Wizard";
 import { OpenClawAgentManager } from "./components/OpenClawAgentManager";
 import { OpenClawWizard } from "./components/OpenClawWizard";
+import { PricingPage } from "./components/PricingPage";
 import { SessionExpiredNotice } from "./components/SessionExpiredNotice";
+import { StripeAccountManager } from "./components/StripeAccountManager";
+import { StripeWizard } from "./components/StripeWizard";
+import { SubscriptionPanel } from "./components/SubscriptionPanel";
+import { UpgradePromptModal } from "./components/UpgradePromptModal";
 import { WordPressModuleManager } from "./components/WordPressModuleManager";
 import { WordPressWizard } from "./components/WordPressWizard";
 import {
@@ -25,6 +30,11 @@ import {
 type HealthStatus = "pending" | "ok" | "down";
 type Provider = "anthropic" | "openai" | "ollama";
 type Platform = "vercel" | "render" | "github" | "supabase";
+
+// Invoked when a create request is rejected with 403 tier_upgrade_required, so
+// the app can surface the UpgradePromptModal. Wired from IntegrationsPanel and
+// ProjectsPanel up to App.
+type TierLimitHandler = (reason: string, limitHit: string) => void;
 
 const HEALTH_URL = "https://api.aiconnect.macrotechtitan.com/health";
 const CHANGELOG_URL =
@@ -645,7 +655,8 @@ type IntegrationType =
   | "anthropic"
   | "wordpress"
   | "openclaw"
-  | "auth0";
+  | "auth0"
+  | "stripe";
 
 const INTEGRATION_LABEL: Record<IntegrationType, string> = {
   sendgrid: "SendGrid",
@@ -654,6 +665,7 @@ const INTEGRATION_LABEL: Record<IntegrationType, string> = {
   wordpress: "WordPress",
   openclaw: "OpenClaw",
   auth0: "Auth0",
+  stripe: "Stripe",
 };
 
 interface Integration {
@@ -731,13 +743,27 @@ function describeIntegrationIdentity(
       if (count !== null) return `${count} app${count === 1 ? "" : "s"}`;
       return "Ready for new projects";
     }
+    case "stripe": {
+      // Identity (POST) carries the derived account status; on reload it falls
+      // back to a generic line until "Test Connection" refreshes it.
+      const status =
+        sessionIdentity && typeof sessionIdentity.status === "string"
+          ? sessionIdentity.status
+          : null;
+      if (status === "active") return "Account active";
+      if (status === "pending") return "Onboarding pending";
+      if (status === "restricted") return "Account restricted";
+      return "Connected";
+    }
   }
 }
 
 function IntegrationsPanel({
   getAccessTokenSilently,
+  onTierLimit,
 }: {
   getAccessTokenSilently: GetAccessToken;
+  onTierLimit?: TierLimitHandler;
 }) {
   const [integrations, setIntegrations] = useState<Integration[] | null>(null);
   // Provider keys, loaded for the openai/anthropic dropdowns and to resolve
@@ -779,6 +805,13 @@ function IntegrationsPanel({
     integrationId: string;
     domain?: string;
     defaultApplicationId?: string;
+  } | null>(null);
+  // Stripe Connect uses a guided wizard too (cloud mode — no gating).
+  const [stripeWizardOpen, setStripeWizardOpen] = useState(false);
+  // Inline Stripe account manager (opened from a row or the wizard's final
+  // step). Only the id is required to call the API.
+  const [stripeManager, setStripeManager] = useState<{
+    integrationId: string;
   } | null>(null);
   const [localMode, setLocalMode] = useState<boolean | null>(null);
   // Inline agent manager (opened from a row or from the wizard's final step).
@@ -926,6 +959,26 @@ function IntegrationsPanel({
         return;
       }
 
+      // Free-tier limit hit — surface the upgrade prompt instead of an inline
+      // error. The API returns { error: 'tier_upgrade_required', message,
+      // limit_hit }.
+      if (res.status === 403 && onTierLimit) {
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          message?: string;
+          limit_hit?: string;
+        };
+        if (body.error === "tier_upgrade_required") {
+          onTierLimit(
+            body.message ?? "You've hit a Free plan limit.",
+            body.limit_hit ?? "",
+          );
+          return;
+        }
+        setAddError(body.message ?? "Please check your input.");
+        return;
+      }
+
       if (!res.ok) {
         let msg =
           res.status >= 500
@@ -1054,7 +1107,7 @@ function IntegrationsPanel({
 
   // Light-touch revalidation: GET the type's read endpoint and surface ok/fail
   // inline on the row (no toast system in this app). Result clears on next run.
-  // OpenClaw lists agents; Auth0 lists applications.
+  // OpenClaw lists agents; Auth0 lists applications; Stripe reads the account.
   async function handleTestConnection(c: Integration) {
     setTestStatus((prev) => {
       const next = { ...prev };
@@ -1062,15 +1115,19 @@ function IntegrationsPanel({
       return next;
     });
     const isAuth0 = c.integration_type === "auth0";
+    const isStripe = c.integration_type === "stripe";
     const path = isAuth0
       ? `/api/integrations/${c.id}/auth0/applications`
-      : `/api/integrations/${c.id}/agents`;
+      : isStripe
+        ? `/api/integrations/${c.id}/stripe/account`
+        : `/api/integrations/${c.id}/agents`;
     try {
       const res = await authedFetch(path, {}, getAccessTokenSilently);
       if (res.ok) {
         const body = (await res.json().catch(() => ({}))) as {
           agents?: unknown[];
           applications?: unknown[];
+          status?: string;
         };
         if (isAuth0) {
           const count = Array.isArray(body.applications)
@@ -1081,6 +1138,16 @@ function IntegrationsPanel({
             [c.id]: {
               ok: true,
               msg: `Connected — ${count} application(s) in the tenant.`,
+            },
+          }));
+          return;
+        }
+        if (isStripe) {
+          setTestStatus((prev) => ({
+            ...prev,
+            [c.id]: {
+              ok: true,
+              msg: `Connected — account status: ${body.status ?? "unknown"}.`,
             },
           }));
           return;
@@ -1273,6 +1340,26 @@ function IntegrationsPanel({
                       </button>
                     </>
                   ) : null}
+                  {c.integration_type === "stripe" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() =>
+                          setStripeManager({ integrationId: c.id })
+                        }
+                      >
+                        Manage Account
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => void handleTestConnection(c)}
+                      >
+                        Test Connection
+                      </button>
+                    </>
+                  ) : null}
                   <button
                     type="button"
                     className="btn-danger"
@@ -1304,6 +1391,7 @@ function IntegrationsPanel({
             <option value="anthropic">Anthropic</option>
             <option value="wordpress">WordPress</option>
             <option value="auth0">Auth0</option>
+            <option value="stripe">Stripe</option>
             <option
               value="openclaw"
               disabled={localMode === false}
@@ -1393,6 +1481,21 @@ function IntegrationsPanel({
               Connect Auth0
             </button>
           </>
+        ) : addType === "stripe" ? (
+          <>
+            <p className="muted">
+              Connecting Stripe lets AI Connect create a Stripe Express account
+              for projects you provision so they can accept payments. The wizard
+              walks you through it.
+            </p>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => setStripeWizardOpen(true)}
+            >
+              Connect Stripe
+            </button>
+          </>
         ) : (
           <button
             type="submit"
@@ -1466,6 +1569,29 @@ function IntegrationsPanel({
           domain={auth0Manager.domain}
           defaultApplicationId={auth0Manager.defaultApplicationId}
           onClose={() => setAuth0Manager(null)}
+        />
+      ) : null}
+
+      {stripeWizardOpen ? (
+        <StripeWizard
+          getAccessTokenSilently={getAccessTokenSilently}
+          onClose={() => setStripeWizardOpen(false)}
+          onConnected={() => void refresh()}
+          onManageAccount={(integrationId) => {
+            // Close the wizard and open the account manager on the just-created
+            // integration so the user can watch onboarding status settle.
+            setStripeWizardOpen(false);
+            setStripeManager({ integrationId });
+            void refresh();
+          }}
+        />
+      ) : null}
+
+      {stripeManager ? (
+        <StripeAccountManager
+          getAccessTokenSilently={getAccessTokenSilently}
+          integrationId={stripeManager.integrationId}
+          onClose={() => setStripeManager(null)}
         />
       ) : null}
 
@@ -1836,8 +1962,10 @@ interface ProjectRow {
 
 function ProjectsPanel({
   getAccessTokenSilently,
+  onTierLimit,
 }: {
   getAccessTokenSilently: GetAccessToken;
+  onTierLimit?: TierLimitHandler;
 }) {
   const [projects, setProjects] = useState<ProjectRow[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -1923,6 +2051,27 @@ function ProjectsPanel({
         },
         getAccessTokenSilently,
       );
+
+      // Free-tier limit hit — surface the upgrade prompt instead of an inline
+      // error. The API returns { error: 'tier_upgrade_required', message,
+      // limit_hit }.
+      if (res.status === 403 && onTierLimit) {
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          message?: string;
+          limit_hit?: string;
+        };
+        if (body.error === "tier_upgrade_required") {
+          onTierLimit(
+            body.message ?? "You've hit a Free plan limit.",
+            body.limit_hit ?? "",
+          );
+          return;
+        }
+        setAddError(body.message ?? "Couldn't create project.");
+        return;
+      }
+
       if (!res.ok) {
         let msg =
           res.status >= 500
@@ -2380,6 +2529,14 @@ export function App() {
   const [me, setMe] = useState<MeShape | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
+  // Set when a create request hits a Free-tier limit; drives the upgrade modal.
+  const [upgradePrompt, setUpgradePrompt] = useState<{
+    reason: string;
+    limitHit: string;
+  } | null>(null);
+  const handleTierLimit = useCallback<TierLimitHandler>((reason, limitHit) => {
+    setUpgradePrompt({ reason, limitHit });
+  }, []);
   const {
     isAuthenticated,
     isLoading,
@@ -2544,8 +2701,13 @@ export function App() {
         {isAuthenticated && showSettings ? (
           <section className="settings-block">
             <h2>Settings</h2>
+            <SubscriptionPanel
+              getAccessTokenSilently={getAccessTokenSilently}
+            />
+            <PricingPage getAccessTokenSilently={getAccessTokenSilently} />
             <ProjectsPanel
               getAccessTokenSilently={getAccessTokenSilently}
+              onTierLimit={handleTierLimit}
             />
             <PlatformCredentialsPanel
               getAccessTokenSilently={getAccessTokenSilently}
@@ -2553,12 +2715,22 @@ export function App() {
             <KeysPanel getAccessTokenSilently={getAccessTokenSilently} />
             <IntegrationsPanel
               getAccessTokenSilently={getAccessTokenSilently}
+              onTierLimit={handleTierLimit}
             />
             <PromptTester
               getAccessTokenSilently={getAccessTokenSilently}
             />
           </section>
         ) : null}
+
+        {/* Fired when a Free user hits a tier limit anywhere in Settings. */}
+        <UpgradePromptModal
+          open={upgradePrompt !== null}
+          onClose={() => setUpgradePrompt(null)}
+          reason={upgradePrompt?.reason ?? ""}
+          limitHit={upgradePrompt?.limitHit ?? ""}
+          getAccessTokenSilently={getAccessTokenSilently}
+        />
 
         <section className="devs">
           <h2>For developers — what AI Connect actually does</h2>

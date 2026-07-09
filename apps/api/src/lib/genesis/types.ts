@@ -11,7 +11,8 @@ export type GenesisStepName =
   | "wire_github_to_render"
   | "inject_env_vars"
   | "verify_deployment"
-  | "wire_auth0";
+  | "wire_auth0"
+  | "wire_stripe";
 
 // The three templates Project Genesis can scaffold from. Mirrors the
 // projects.template_choice CHECK constraint.
@@ -103,6 +104,9 @@ export interface GenesisContext {
   organizationId: string;
   name: string;
   slug: string;
+  // The project creator's email, loaded at context assembly. Stripe Connect
+  // requires an email to create an Express account (wire_stripe step).
+  userEmail: string;
   templateRepoUrl: string;
   credentials: {
     vercel: string;

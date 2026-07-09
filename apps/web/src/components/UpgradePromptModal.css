@@ -1,0 +1,49 @@
+/* Upgrade prompt modal body. The Modal, Card, and Button chrome come from the
+ * design-system primitives; these classes only arrange the body content. */
+.upgrade-modal__copy {
+  margin: 0 0 var(--ai-space-3);
+  font-size: var(--ai-text-base);
+  line-height: var(--ai-leading-normal);
+}
+
+.upgrade-modal__benefits-title {
+  margin: 0 0 var(--ai-space-2);
+  font-size: var(--ai-text-sm);
+  font-weight: var(--ai-weight-semibold);
+  opacity: 0.8;
+}
+
+.upgrade-modal__benefits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-1);
+}
+
+.upgrade-modal__benefits li {
+  display: flex;
+  gap: var(--ai-space-2);
+  font-size: var(--ai-text-base);
+}
+
+.upgrade-modal__benefits li::before {
+  content: "✓";
+  color: var(--ai-color-success-bg);
+  font-weight: var(--ai-weight-bold);
+  flex: none;
+}
+
+.upgrade-modal__error {
+  margin: var(--ai-space-3) 0 0;
+  font-size: var(--ai-text-sm);
+  color: var(--ai-color-error-bg);
+}
+
+.upgrade-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--ai-space-2);
+  margin-top: var(--ai-space-4);
+}

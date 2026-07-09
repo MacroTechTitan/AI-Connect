@@ -1,0 +1,111 @@
+/* Stripe Connect account manager — inline panel under the integrations list.
+ * Structural chrome (cards, badges, buttons) comes from the design-system
+ * primitives; these classes only arrange the account detail body. Mirrors the
+ * Auth0 manager's .a0m conventions. */
+.sam {
+  margin-top: var(--ai-space-2);
+  padding: var(--ai-space-3) var(--ai-space-4);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--ai-radius-soft);
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-3);
+  font-family: var(--ai-font-sans);
+}
+.sam-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.sam-head h4 {
+  margin: 0;
+  font-size: var(--ai-text-md);
+}
+.sam-status-head {
+  display: flex;
+  align-items: center;
+  gap: var(--ai-space-2);
+  margin-bottom: var(--ai-space-2);
+}
+.sam-grid {
+  display: flex;
+  gap: var(--ai-space-6);
+  flex-wrap: wrap;
+  margin-top: var(--ai-space-2);
+}
+.sam-detail-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-1);
+}
+.sam-label {
+  font-size: var(--ai-text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.6;
+}
+.sam-accountid {
+  display: flex;
+  align-items: center;
+  gap: var(--ai-space-2);
+  flex-wrap: wrap;
+}
+.sam-mono {
+  font-family: var(--ai-font-mono);
+  word-break: break-all;
+}
+.sam-flags {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-1);
+  margin-top: var(--ai-space-3);
+  font-size: var(--ai-text-sm);
+}
+.sam-flag {
+  display: flex;
+  align-items: center;
+  gap: var(--ai-space-2);
+}
+.sam-flag-yes {
+  color: var(--ai-color-success-bg);
+  font-weight: var(--ai-weight-bold);
+}
+.sam-flag-no {
+  color: var(--ai-color-error-bg);
+  font-weight: var(--ai-weight-bold);
+}
+.sam-warn-title {
+  margin: 0 0 var(--ai-space-1);
+  font-weight: var(--ai-weight-semibold);
+}
+.sam-reqs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-2);
+  margin: var(--ai-space-2) 0;
+}
+.sam-req-list {
+  margin: 0;
+  padding-left: var(--ai-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-0_5);
+  font-size: var(--ai-text-sm);
+}
+.sam-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ai-space-2);
+  flex-wrap: wrap;
+}
+.sam-muted {
+  margin: 0;
+  font-size: var(--ai-text-sm);
+  opacity: 0.7;
+}
+.sam-error {
+  margin: 0;
+  font-size: var(--ai-text-sm);
+  color: var(--ai-color-error-bg);
+}

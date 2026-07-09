@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS "projects_stripe_account_id_idx" ON "projects" USING btree ("stripe_account_id") WHERE "projects"."stripe_account_id" IS NOT NULL;
