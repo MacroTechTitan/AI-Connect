@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
+  bigint,
   boolean,
   check,
   index,
@@ -483,7 +484,7 @@ export const integrations = pgTable(
   (table) => ({
     integrationTypeCheck: check(
       "integrations_integration_type_check",
-      sql`${table.integrationType} IN ('sendgrid', 'openai', 'anthropic', 'wordpress', 'openclaw', 'auth0', 'stripe')`,
+      sql`${table.integrationType} IN ('sendgrid', 'openai', 'anthropic', 'wordpress', 'openclaw', 'auth0', 'stripe', 'github')`,
     ),
     statusCheck: check(
       "integrations_status_check",
@@ -616,3 +617,76 @@ export const stripeWebhookEvents = pgTable(
 
 export type StripeWebhookEventRow = typeof stripeWebhookEvents.$inferSelect;
 export type NewStripeWebhookEvent = typeof stripeWebhookEvents.$inferInsert;
+
+export const githubInstallations = pgTable(
+  "github_installations",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    // GitHub's numeric installation ID (one per App+account). bigint in number
+    // mode — GitHub IDs are ~9 digits, well under Number.MAX_SAFE_INTEGER.
+    installationId: bigint("installation_id", { mode: "number" }).notNull(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    accountLogin: text("account_login").notNull(),
+    accountType: text("account_type").notNull(),
+    accountId: bigint("account_id", { mode: "number" }).notNull(),
+    repositorySelection: text("repository_selection").notNull(),
+    // Snapshot of the permissions granted at install time.
+    permissions: jsonb("permissions").notNull(),
+    // Set when GitHub suspends the installation; cleared on unsuspend.
+    suspendedAt: timestamp("suspended_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    installationIdUnique: unique(
+      "github_installations_installation_id_unique",
+    ).on(table.installationId),
+    accountTypeCheck: check(
+      "github_installations_account_type_check",
+      sql`${table.accountType} IN ('User', 'Organization')`,
+    ),
+    repositorySelectionCheck: check(
+      "github_installations_repository_selection_check",
+      sql`${table.repositorySelection} IN ('all', 'selected')`,
+    ),
+    userIdIdx: index("github_installations_user_id_idx").on(table.userId),
+  }),
+);
+
+export type GithubInstallationRow = typeof githubInstallations.$inferSelect;
+export type NewGithubInstallation = typeof githubInstallations.$inferInsert;
+
+export const githubWebhookEvents = pgTable(
+  "github_webhook_events",
+  {
+    // GitHub's X-GitHub-Delivery header value. Natural key: PK conflict on
+    // INSERT means a duplicate delivery, safe to skip. Same shape as
+    // stripe_webhook_events (Sprint 9).
+    id: text("id").primaryKey(),
+    eventType: text("event_type").notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    processed: boolean("processed").notNull().default(false),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    processingError: text("processing_error"),
+    payload: jsonb("payload").notNull(),
+  },
+  (table) => ({
+    eventTypeIdx: index("github_webhook_events_event_type_idx").on(
+      table.eventType,
+    ),
+    receivedAtIdx: index("github_webhook_events_received_at_idx").on(
+      table.receivedAt,
+    ),
+  }),
+);
+
+export type GithubWebhookEventRow = typeof githubWebhookEvents.$inferSelect;
+export type NewGithubWebhookEvent = typeof githubWebhookEvents.$inferInsert;

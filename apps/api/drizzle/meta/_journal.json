@@ -99,6 +99,13 @@
       "when": 1783649918818,
       "tag": "0013_sticky_puff_adder",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1783653006633,
+      "tag": "0014_wealthy_yellowjacket",
+      "breakpoints": true
     }
   ]
 }
