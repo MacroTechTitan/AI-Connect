@@ -20,6 +20,9 @@ export const users = pgTable(
     id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
     email: text("email").notNull().unique(),
     role: text("role").notNull().default("user"),
+    // Sprint 10: single admin flag gating the /api/admin/* routes + admin UI.
+    // One admin role for v1 (Joseph); Sprint 11+ may migrate to a roles table.
+    isAdmin: boolean("is_admin").notNull().default(false),
     organizationId: uuid("organization_id").references(
       (): AnyPgColumn => organizations.id,
       { onDelete: "set null" },
