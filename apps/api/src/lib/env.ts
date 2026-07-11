@@ -23,6 +23,18 @@ const envSchema = z.object({
   // Stripe Dashboard, not by AI Connect. Read by the subscription checkout route.
   STRIPE_PRO_PRICE_ID: z.string().optional(),
 
+  // GitHub App — Sprint 10 ships the single ai-connect-app GitHub App users
+  // install on their own org so Project Genesis can create repos there. Required
+  // in production, optional in dev. See lib/integrations/githubClient.ts — the
+  // App is lazily instantiated and only throws on first use if unset.
+  GITHUB_APP_ID: z.string().optional(),
+  GITHUB_APP_CLIENT_ID: z.string().optional(),
+  GITHUB_APP_CLIENT_SECRET: z.string().optional(),
+  GITHUB_APP_WEBHOOK_SECRET: z.string().optional(),
+  // Multi-line PEM. Env vars often carry literal "\n"; githubClient normalizes
+  // them to real newlines before signing.
+  GITHUB_APP_PRIVATE_KEY: z.string().optional(),
+
   // Sprint 2 placeholder. 32-byte hex string. Generate with openssl rand -hex 32.
   MASTER_KEY: z.string().length(64).optional(),
 
