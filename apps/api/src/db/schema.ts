@@ -96,6 +96,11 @@ export const projects = pgTable(
     // Sprint 9: reflects the Connect account.updated webhook state. NULL until
     // a Stripe account is wired.
     stripeAccountStatus: text("stripe_account_status"),
+    // Sprint 10: the GitHub org/account the provisioned repo lives in. Set to
+    // the user's org when create_github_repo used their GitHub App installation,
+    // or the platform-PAT account otherwise. NULL for legacy (pre-Sprint-10)
+    // projects.
+    repoOwnerOrg: text("repo_owner_org"),
     // References a vault.secrets entry holding the project's Supabase Postgres
     // connection string. NULL until create_supabase_project captures it.
     databaseConnectionStringVaultId: uuid("database_connection_string_vault_id"),

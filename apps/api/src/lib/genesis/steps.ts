@@ -1,9 +1,11 @@
 import { randomBytes } from "node:crypto";
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { getDb } from "../../db/client.js";
-import { projects } from "../../db/schema.js";
+import { githubInstallations, integrations, projects } from "../../db/schema.js";
+import { githubClient } from "../integrations/githubClient.js";
+import type { GithubConfig } from "../integrations/types.js";
 import { logSystem } from "../logging.js";
 import {
   createRepoFromTemplate,
@@ -64,7 +66,160 @@ function detailString(
 // is terminal — the orchestrator stops the run.
 const GITHUB_NAME_RETRIES = 3;
 
+// Sprint 10: resolves the project creator's validated GitHub App integration
+// (with include_in_projects=true), if any. Returns the installation to create
+// the repo under, or null when the user has no usable installation (no
+// integration, uninstalled, or suspended) — in which case create_github_repo
+// falls back to the platform-PAT flow.
+async function findUserGithubInstallation(userId: string): Promise<{
+  installationId: number;
+  accountLogin: string;
+  accountType: "User" | "Organization";
+} | null> {
+  const db = getDb();
+
+  const integration = await db
+    .select({ config: integrations.config })
+    .from(integrations)
+    .where(
+      and(
+        eq(integrations.userId, userId),
+        eq(integrations.integrationType, "github"),
+        eq(integrations.status, "validated"),
+        eq(integrations.includeInProjects, true),
+      ),
+    )
+    .limit(1)
+    .then((rows) => rows[0]);
+
+  if (!integration) return null;
+
+  const config = integration.config as GithubConfig;
+
+  // The installation could have been uninstalled/suspended since validation.
+  const installation = await db
+    .select({ suspendedAt: githubInstallations.suspendedAt })
+    .from(githubInstallations)
+    .where(eq(githubInstallations.installationId, config.installation_id))
+    .limit(1)
+    .then((rows) => rows[0]);
+
+  if (!installation) return null;
+  if (installation.suspendedAt) return null;
+
+  return {
+    installationId: config.installation_id,
+    accountLogin: config.account_login,
+    accountType: config.account_type,
+  };
+}
+
+// Best-effort: record which GitHub org the repo landed in. Display/tracking
+// only, so a failed write never fails provisioning.
+async function persistRepoOwnerOrg(
+  projectId: string,
+  repoOwnerOrg: string,
+): Promise<void> {
+  await getDb()
+    .update(projects)
+    .set({ repoOwnerOrg, updatedAt: new Date() })
+    .where(eq(projects.id, projectId))
+    .catch(() => {});
+}
+
+// Sprint 10: prefer creating the repo in the user's own GitHub org via their
+// AI Connect App installation. Falls back to the existing platform-PAT flow
+// (createGithubRepoViaPlatform) if the user has no usable installation OR the
+// App-based create fails. Zero change for users without a GitHub integration.
+//
+// CAVEAT: the App path creates a basic auto_init repo WITHOUT the AI-Connect
+// template scaffolding (App-side templating is deferred — see SPRINT_10_SPEC
+// deferrals). Downstream steps still read full_name/html_url from details, and
+// the Render build/start config still comes from the chosen template, but the
+// repo contents start empty until the user pushes code.
 export async function createGithubRepo(
+  ctx: GenesisContext,
+): Promise<GenesisStepResult> {
+  const userInstallation = await findUserGithubInstallation(ctx.userId);
+
+  if (userInstallation) {
+    try {
+      const repo = await githubClient.createRepo(
+        userInstallation.installationId,
+        userInstallation.accountType,
+        userInstallation.accountLogin,
+        {
+          name: ctx.slug,
+          description: ctx.name,
+          private: true,
+          auto_init: true,
+        },
+      );
+
+      await persistRepoOwnerOrg(ctx.projectId, userInstallation.accountLogin);
+
+      await logSystem(
+        "info",
+        "genesis",
+        `GitHub repo created via user installation for project ${ctx.projectId}: ${repo.full_name}`,
+        {
+          projectId: ctx.projectId,
+          installationId: userInstallation.installationId,
+          accountLogin: userInstallation.accountLogin,
+          repoFullName: repo.full_name,
+        },
+      );
+
+      // Mirror the platform-flow detail keys so create_vercel_project /
+      // create_render_service keep reading full_name + html_url unchanged.
+      return {
+        status: "succeeded",
+        resourceId: repo.full_name,
+        platform: "github",
+        rollbackable: true,
+        details: {
+          full_name: repo.full_name,
+          html_url: repo.html_url,
+          clone_url: `${repo.html_url}.git`,
+          name: repo.name,
+          repo_id: repo.id,
+          default_branch: repo.default_branch,
+          // App path doesn't scaffold from a template (deferred).
+          template: null,
+          // Sprint 10 rollback fork reads these to delete via the installation.
+          created_via: "user_installation",
+          installation_id: userInstallation.installationId,
+          repo_owner_org: userInstallation.accountLogin,
+        },
+      };
+    } catch (err) {
+      // App-based create failed — log and fall through to the platform flow.
+      await logSystem(
+        "warn",
+        "genesis",
+        `User-installation repo creation failed for project ${ctx.projectId}; falling back to platform flow`,
+        {
+          projectId: ctx.projectId,
+          installationId: userInstallation.installationId,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      );
+    }
+  }
+
+  // Fall back to the existing platform-PAT flow (unchanged).
+  const result = await createGithubRepoViaPlatform(ctx);
+  if (result.status === "succeeded" && result.resourceId) {
+    const owner = result.resourceId.split("/")[0];
+    if (owner) await persistRepoOwnerOrg(ctx.projectId, owner);
+  }
+  return result;
+}
+
+// The original Sprint 4/5 GitHub repo creation, unchanged — now the fallback
+// path when the user has no usable GitHub App installation. Uses the project
+// creator's platform-credential GitHub PAT (ctx.credentials.github).
+async function createGithubRepoViaPlatform(
   ctx: GenesisContext,
 ): Promise<GenesisStepResult> {
   const github = getPlatformClient("github");

@@ -317,6 +317,24 @@ export class GithubClient {
   }
 
   /**
+   * Deletes a repo. Installation-level auth. Requires the App's
+   * administration:write permission (granted at App creation). Used by the
+   * Project Genesis rollback when a repo was created via a user installation.
+   */
+  async deleteRepo(
+    installationId: number,
+    owner: string,
+    repo: string,
+  ): Promise<void> {
+    const octokit = await getInstallationOctokit(installationId);
+    try {
+      await octokit.repos.delete({ owner, repo });
+    } catch (err) {
+      throw mapGithubError(err);
+    }
+  }
+
+  /**
    * Creates a repo in the installation's account. Installation-level auth.
    * Uses createInOrg for Organization accounts, createForAuthenticatedUser
    * for User accounts.
