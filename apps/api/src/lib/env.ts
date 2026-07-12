@@ -34,6 +34,12 @@ const envSchema = z.object({
   // Multi-line PEM. Env vars often carry literal "\n"; githubClient normalizes
   // them to real newlines before signing.
   GITHUB_APP_PRIVATE_KEY: z.string().optional(),
+  // HMAC key for signing the GitHub install-flow state parameter (CSRF
+  // protection — see lib/integrations/githubOAuthState.ts). A dedicated
+  // high-entropy secret; deliberately NOT reusing MASTER_KEY (the vault AES
+  // key) for a second cryptographic purpose. Optional in dev, required in
+  // prod. Generate with openssl rand -hex 32.
+  GITHUB_STATE_SIGNING_KEY: z.string().optional(),
 
   // Sprint 2 placeholder. 32-byte hex string. Generate with openssl rand -hex 32.
   MASTER_KEY: z.string().length(64).optional(),

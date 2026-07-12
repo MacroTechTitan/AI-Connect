@@ -9,6 +9,7 @@ import { registerIntegrationsRoutes } from "./routes/integrations.js";
 import { registerKeysRoutes } from "./routes/keys.js";
 import { registerMeRoutes } from "./routes/me.js";
 import { registerPlatformCredentialsRoutes } from "./routes/platformCredentials.js";
+import { registerGithubOAuthRoutes } from "./routes/githubOAuth.js";
 import { registerGithubWebhookRoutes } from "./routes/githubWebhook.js";
 import { registerProjectsRoutes } from "./routes/projects.js";
 import { registerPromptRoutes } from "./routes/prompt.js";
@@ -112,6 +113,12 @@ registerWordPressPluginRoutes(app);
 // Stripe (checkout, customer portal, status, cancel). The Stripe webhook that
 // reconciles these lives at /api/stripe/webhook (registered above, pre-JSON).
 registerSubscriptionRoutes(app);
+
+// /api/github/install (Auth0 JWT-gated) + /api/github/oauth/callback (public,
+// authed via HMAC-signed state) — the GitHub App install flow. The webhook that
+// reconciles installations lives at /api/github/webhook (registered above,
+// pre-JSON).
+registerGithubOAuthRoutes(app);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "not_found" });
