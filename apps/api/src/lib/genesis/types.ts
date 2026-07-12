@@ -33,6 +33,11 @@ export const TEMPLATE_REPOS: Record<
     owner: string;
     repo: string;
     render: { buildCommand: string; startCommand: string };
+    // Sprint 10.5: whether create_github_repo may use the user's GitHub App
+    // installation (Path A) for this template. false until App-side template
+    // scaffolding lands — the App path currently creates an empty auto_init
+    // repo, which would break Render's first deploy. All templates false in v1.
+    supportsGithubAppPath: boolean;
   }
 > = {
   "html-js": {
@@ -42,6 +47,7 @@ export const TEMPLATE_REPOS: Record<
       buildCommand: "npm install",
       startCommand: "node server.js",
     },
+    supportsGithubAppPath: false,
   },
   sveltekit: {
     owner: "MacroTechTitan",
@@ -50,6 +56,7 @@ export const TEMPLATE_REPOS: Record<
       buildCommand: "npm install && npm run build",
       startCommand: "node build/index.js",
     },
+    supportsGithubAppPath: false,
   },
   nextjs: {
     owner: "MacroTechTitan",
@@ -58,6 +65,7 @@ export const TEMPLATE_REPOS: Record<
       buildCommand: "npm install && npm run build",
       startCommand: "npm start",
     },
+    supportsGithubAppPath: false,
   },
 } as const;
 

@@ -127,19 +127,53 @@ async function persistRepoOwnerOrg(
     .catch(() => {});
 }
 
+// Runs the platform-PAT flow and records the resulting repo's owner org.
+// The shared fallback for every "not Path A" case.
+async function createGithubRepoViaPlatformAndRecordOwner(
+  ctx: GenesisContext,
+): Promise<GenesisStepResult> {
+  const result = await createGithubRepoViaPlatform(ctx);
+  if (result.status === "succeeded" && result.resourceId) {
+    const owner = result.resourceId.split("/")[0];
+    if (owner) await persistRepoOwnerOrg(ctx.projectId, owner);
+  }
+  return result;
+}
+
 // Sprint 10: prefer creating the repo in the user's own GitHub org via their
-// AI Connect App installation. Falls back to the existing platform-PAT flow
-// (createGithubRepoViaPlatform) if the user has no usable installation OR the
-// App-based create fails. Zero change for users without a GitHub integration.
+// AI Connect App installation (Path A). Falls back to the existing platform-PAT
+// flow (createGithubRepoViaPlatform) when the user has no usable installation OR
+// the App-based create fails. Zero change for users without a GitHub integration.
 //
-// CAVEAT: the App path creates a basic auto_init repo WITHOUT the AI-Connect
-// template scaffolding (App-side templating is deferred — see SPRINT_10_SPEC
-// deferrals). Downstream steps still read full_name/html_url from details, and
-// the Render build/start config still comes from the chosen template, but the
-// repo contents start empty until the user pushes code.
+// GATE (Sprint 10.5): Path A only fires when the chosen template opts in via
+// supportsGithubAppPath. All templates are false in v1 because the App path
+// creates an empty auto_init repo (App-side template scaffolding is deferred),
+// which would break Render's first deploy. Until scaffolding lands, this gate
+// keeps the platform-PAT flow as the only reachable path.
 export async function createGithubRepo(
   ctx: GenesisContext,
 ): Promise<GenesisStepResult> {
+  const template = ctx.templateChoice
+    ? TEMPLATE_REPOS[ctx.templateChoice]
+    : undefined;
+
+  // Legacy/unset templateChoice → undefined → treated as unsupported.
+  if (!template?.supportsGithubAppPath) {
+    const userInstallation = await findUserGithubInstallation(ctx.userId);
+    await logSystem(
+      "info",
+      "genesis",
+      `GitHub App path skipped (template unsupported) for project ${ctx.projectId}`,
+      {
+        projectId: ctx.projectId,
+        templateChoice: ctx.templateChoice ?? null,
+        // Tracks latent demand: users who'd benefit once scaffolding lands.
+        userHasGithubIntegration: userInstallation !== null,
+      },
+    );
+    return createGithubRepoViaPlatformAndRecordOwner(ctx);
+  }
+
   const userInstallation = await findUserGithubInstallation(ctx.userId);
 
   if (userInstallation) {
@@ -207,13 +241,9 @@ export async function createGithubRepo(
     }
   }
 
-  // Fall back to the existing platform-PAT flow (unchanged).
-  const result = await createGithubRepoViaPlatform(ctx);
-  if (result.status === "succeeded" && result.resourceId) {
-    const owner = result.resourceId.split("/")[0];
-    if (owner) await persistRepoOwnerOrg(ctx.projectId, owner);
-  }
-  return result;
+  // Path A opted in but no usable installation, or App create failed — fall
+  // back to the existing platform-PAT flow (unchanged).
+  return createGithubRepoViaPlatformAndRecordOwner(ctx);
 }
 
 // The original Sprint 4/5 GitHub repo creation, unchanged — now the fallback
