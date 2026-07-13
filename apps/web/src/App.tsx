@@ -2862,6 +2862,11 @@ export function App() {
                     {showSettings ? "Hide settings" : "Manage settings"}
                   </button>
                   {" · "}
+                  {/* Visible to all; the backend 403s non-admins. */}
+                  <a className="linklike" href="/admin">
+                    Admin
+                  </a>
+                  {" · "}
                   <button
                     type="button"
                     className="linklike"

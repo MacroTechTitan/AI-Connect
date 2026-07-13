@@ -178,6 +178,8 @@ async function handleGetUser(req: Request, res: Response): Promise<void> {
       email: users.email,
       isAdmin: users.isAdmin,
       createdAt: users.createdAt,
+      // The subscription row id — the admin UI needs it to force-cancel.
+      subscriptionId: subscriptions.id,
       tier: subscriptions.tier,
       status: subscriptions.status,
       stripeCustomerId: subscriptions.stripeCustomerId,
