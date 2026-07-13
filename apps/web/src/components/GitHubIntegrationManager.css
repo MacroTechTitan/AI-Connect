@@ -1,0 +1,152 @@
+/* GitHub integration manager — inline panel under the integrations list.
+ * Structural chrome (cards, badges, buttons, inputs) comes from the design-
+ * system primitives; these classes only arrange the body. Mirrors the Stripe/
+ * Auth0 manager conventions. */
+.ghm {
+  margin-top: var(--ai-space-2);
+  padding: var(--ai-space-3) var(--ai-space-4);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--ai-radius-soft);
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-3);
+  font-family: var(--ai-font-sans);
+}
+.ghm-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.ghm-head h4 {
+  margin: 0;
+  font-size: var(--ai-text-md);
+}
+.ghm-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.ghm-section-head h5 {
+  margin: 0;
+  font-size: var(--ai-text-sm);
+}
+.ghm-grid {
+  display: flex;
+  gap: var(--ai-space-6);
+  flex-wrap: wrap;
+  margin-top: var(--ai-space-2);
+}
+.ghm-detail-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-1);
+}
+.ghm-label {
+  font-size: var(--ai-text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.6;
+}
+.ghm-account {
+  display: flex;
+  align-items: center;
+  gap: var(--ai-space-2);
+  flex-wrap: wrap;
+}
+.ghm-mono {
+  font-family: var(--ai-font-mono);
+  word-break: break-all;
+}
+.ghm-repos {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-2);
+  max-height: 22rem;
+  overflow-y: auto;
+}
+.ghm-repo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-1);
+}
+.ghm-repo-name {
+  display: flex;
+  align-items: center;
+  gap: var(--ai-space-2);
+  flex-wrap: wrap;
+  font-weight: var(--ai-weight-semibold);
+}
+.ghm-repo-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--ai-space-3);
+  flex-wrap: wrap;
+  font-size: var(--ai-text-sm);
+  opacity: 0.85;
+}
+.ghm-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ai-space-2);
+  flex-wrap: wrap;
+}
+.ghm-linkbtn {
+  text-decoration: none;
+}
+.ghm-muted {
+  margin: 0;
+  font-size: var(--ai-text-sm);
+  opacity: 0.7;
+}
+.ghm-error {
+  margin: 0;
+  font-size: var(--ai-text-sm);
+  color: var(--ai-color-error-bg);
+}
+
+/* Create-issue form */
+.ghm-issue-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-3);
+}
+.ghm-issue-row {
+  display: flex;
+  gap: var(--ai-space-3);
+  flex-wrap: wrap;
+}
+.ghm-issue-row > * {
+  flex: 1 1 12rem;
+}
+.ghm-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ai-space-1);
+}
+.ghm-field-label {
+  font-size: var(--ai-text-sm);
+  font-weight: var(--ai-weight-medium);
+}
+.ghm-textarea {
+  background: var(--ai-color-neutral-50);
+  color: inherit;
+  border: 1px solid var(--ai-color-neutral-300);
+  border-radius: var(--ai-radius-soft);
+  padding: var(--ai-space-2) var(--ai-space-3);
+  font: inherit;
+  font-size: var(--ai-text-sm);
+  resize: vertical;
+}
+.ghm-textarea:focus {
+  outline: none;
+  border-color: var(--ai-color-primary-500);
+  box-shadow: 0 0 0 2px var(--ai-color-primary-200);
+}
+
+@media (prefers-color-scheme: dark) {
+  .ghm-textarea {
+    background: var(--ai-color-neutral-900);
+    border-color: var(--ai-color-neutral-700);
+  }
+}

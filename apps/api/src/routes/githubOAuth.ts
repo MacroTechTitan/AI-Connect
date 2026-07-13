@@ -62,7 +62,12 @@ async function handleStartInstall(
     user_id: ctx.userId,
   });
 
-  res.redirect(302, installUrl);
+  // Returns the URL as JSON (not a 302) because this route is behind
+  // requireAuth: the frontend fetches it with the Auth0 bearer, then navigates
+  // the browser to install_url itself. A top-level browser redirect here could
+  // not carry the bearer, and the state must be server-signed, so the frontend
+  // cannot build this URL on its own.
+  res.json({ install_url: installUrl });
 }
 
 // GET /api/github/oauth/callback — user returns here after installing on GitHub.

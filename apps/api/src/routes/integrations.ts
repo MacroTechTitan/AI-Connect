@@ -2,7 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import type { Express, Request, Response } from "express";
 
 import { getDb } from "../db/client.js";
-import { integrations } from "../db/schema.js";
+import { githubInstallations, integrations } from "../db/schema.js";
 import { getIntegrationValidator } from "../lib/integrations/index.js";
 import {
   auth0Client,
@@ -1876,6 +1876,64 @@ async function handleGithubTestConnection(
   }
 }
 
+// GET /api/integrations/github/installation/:installationId — hydrates the
+// installation metadata (login/type/repo-selection) the wizard needs to build
+// the integration config after the user returns from GitHub's install flow.
+// Scoped to the owning user. Distinct from the /:id/github/* routes — the
+// second path segment is the literal "github", so it never collides.
+async function handleGetInstallationForWizard(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const ctx = getCtx(req);
+  const installationId = Number(req.params.installationId);
+
+  if (!Number.isFinite(installationId) || installationId <= 0) {
+    res.status(400).json({ error: "invalid_installation_id" });
+    return;
+  }
+
+  const [installation] = await getDb()
+    .select({
+      installationId: githubInstallations.installationId,
+      accountLogin: githubInstallations.accountLogin,
+      accountType: githubInstallations.accountType,
+      repositorySelection: githubInstallations.repositorySelection,
+      suspendedAt: githubInstallations.suspendedAt,
+    })
+    .from(githubInstallations)
+    .where(
+      and(
+        eq(githubInstallations.installationId, installationId),
+        eq(githubInstallations.userId, ctx.userId),
+      ),
+    )
+    .limit(1);
+
+  if (!installation) {
+    res.status(404).json({
+      error: "installation_not_found",
+      message: "Installation not found or does not belong to you.",
+    });
+    return;
+  }
+
+  if (installation.suspendedAt) {
+    res.status(400).json({
+      error: "installation_suspended",
+      message: "This installation is suspended on GitHub.",
+    });
+    return;
+  }
+
+  res.json({
+    installation_id: installation.installationId,
+    account_login: installation.accountLogin,
+    account_type: installation.accountType,
+    repository_selection: installation.repositorySelection,
+  });
+}
+
 export function registerIntegrationsRoutes(app: Express): void {
   app.post(
     "/api/integrations",
@@ -2045,5 +2103,11 @@ export function registerIntegrationsRoutes(app: Express): void {
     requireAuth,
     requireHydratedUser,
     handleGithubTestConnection,
+  );
+  app.get(
+    "/api/integrations/github/installation/:installationId",
+    requireAuth,
+    requireHydratedUser,
+    handleGetInstallationForWizard,
   );
 }

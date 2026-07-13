@@ -14,6 +14,8 @@ import { OpenClawAgentManager } from "./components/OpenClawAgentManager";
 import { OpenClawWizard } from "./components/OpenClawWizard";
 import { PricingPage } from "./components/PricingPage";
 import { SessionExpiredNotice } from "./components/SessionExpiredNotice";
+import { GitHubIntegrationManager } from "./components/GitHubIntegrationManager";
+import { GitHubWizard } from "./components/GitHubWizard";
 import { StripeAccountManager } from "./components/StripeAccountManager";
 import { StripeWizard } from "./components/StripeWizard";
 import { SubscriptionPanel } from "./components/SubscriptionPanel";
@@ -656,7 +658,8 @@ type IntegrationType =
   | "wordpress"
   | "openclaw"
   | "auth0"
-  | "stripe";
+  | "stripe"
+  | "github";
 
 const INTEGRATION_LABEL: Record<IntegrationType, string> = {
   sendgrid: "SendGrid",
@@ -666,6 +669,7 @@ const INTEGRATION_LABEL: Record<IntegrationType, string> = {
   openclaw: "OpenClaw",
   auth0: "Auth0",
   stripe: "Stripe",
+  github: "GitHub",
 };
 
 interface Integration {
@@ -755,15 +759,38 @@ function describeIntegrationIdentity(
       if (status === "restricted") return "Account restricted";
       return "Connected";
     }
+    case "github": {
+      // account_login/type live in config (persisted); identity (POST) adds
+      // repo_count. suspended surfaces via identity when present.
+      const login =
+        typeof c.config.account_login === "string"
+          ? c.config.account_login
+          : null;
+      const type =
+        typeof c.config.account_type === "string"
+          ? c.config.account_type
+          : null;
+      const suspended =
+        sessionIdentity && sessionIdentity.suspended === true;
+      if (suspended) return "Suspended";
+      if (login) return `Connected to ${login}${type ? ` (${type})` : ""}`;
+      return "Connected";
+    }
   }
 }
 
 function IntegrationsPanel({
   getAccessTokenSilently,
   onTierLimit,
+  githubReturnInstallationId,
+  onGithubReturnHandled,
 }: {
   getAccessTokenSilently: GetAccessToken;
   onTierLimit?: TierLimitHandler;
+  // Set by App when the browser returns from GitHub's install flow with
+  // ?github_installed=1&installation_id=<id>; opens the wizard at its final step.
+  githubReturnInstallationId?: number;
+  onGithubReturnHandled?: () => void;
 }) {
   const [integrations, setIntegrations] = useState<Integration[] | null>(null);
   // Provider keys, loaded for the openai/anthropic dropdowns and to resolve
@@ -813,6 +840,15 @@ function IntegrationsPanel({
   const [stripeManager, setStripeManager] = useState<{
     integrationId: string;
   } | null>(null);
+  // GitHub uses a redirect-based wizard (no in-app credentials). initialId is
+  // set when the browser returns from GitHub, jumping the wizard to step 3.
+  const [githubWizardOpen, setGithubWizardOpen] = useState(false);
+  const [githubWizardInitialId, setGithubWizardInitialId] = useState<
+    number | undefined
+  >(undefined);
+  const [githubManager, setGithubManager] = useState<{
+    integrationId: string;
+  } | null>(null);
   const [localMode, setLocalMode] = useState<boolean | null>(null);
   // Inline agent manager (opened from a row or from the wizard's final step).
   // Only the id is required to call the API; bridge_path/default_agent are for
@@ -826,6 +862,17 @@ function IntegrationsPanel({
   const [testStatus, setTestStatus] = useState<
     Record<string, { ok: boolean; msg: string }>
   >({});
+
+  // Returning from GitHub's install flow: App detected the query params and
+  // handed us the installation id. Open the GitHub wizard at its final step,
+  // then tell App we've consumed it so it doesn't reopen on re-render.
+  useEffect(() => {
+    if (githubReturnInstallationId) {
+      setGithubWizardInitialId(githubReturnInstallationId);
+      setGithubWizardOpen(true);
+      onGithubReturnHandled?.();
+    }
+  }, [githubReturnInstallationId, onGithubReturnHandled]);
 
   // /health is auth-free and DB-free; read local_mode from the same API the
   // rest of the panel talks to (API_BASE), not the hardcoded prod health URL.
@@ -1114,6 +1161,55 @@ function IntegrationsPanel({
       delete next[c.id];
       return next;
     });
+
+    // GitHub's test-connection is a POST returning account + repo count.
+    if (c.integration_type === "github") {
+      try {
+        const res = await authedFetch(
+          `/api/integrations/${c.id}/github/test-connection`,
+          { method: "POST" },
+          getAccessTokenSilently,
+        );
+        if (res.ok) {
+          const body = (await res.json().catch(() => ({}))) as {
+            account_login?: string;
+            repo_count?: number;
+          };
+          setTestStatus((prev) => ({
+            ...prev,
+            [c.id]: {
+              ok: true,
+              msg: `Connected to ${body.account_login ?? "GitHub"} — ${
+                body.repo_count ?? 0
+              } repo(s) accessible.`,
+            },
+          }));
+          return;
+        }
+        let msg = "Connection failed.";
+        try {
+          const body = (await res.json()) as {
+            message?: string;
+            error?: string;
+          };
+          msg = body.message ?? body.error ?? msg;
+        } catch {
+          // keep default
+        }
+        setTestStatus((prev) => ({ ...prev, [c.id]: { ok: false, msg } }));
+      } catch (err) {
+        if (isSessionExpired(err)) {
+          setSessionExpired(true);
+          return;
+        }
+        setTestStatus((prev) => ({
+          ...prev,
+          [c.id]: { ok: false, msg: "Couldn't reach the server. Try again." },
+        }));
+      }
+      return;
+    }
+
     const isAuth0 = c.integration_type === "auth0";
     const isStripe = c.integration_type === "stripe";
     const path = isAuth0
@@ -1360,6 +1456,26 @@ function IntegrationsPanel({
                       </button>
                     </>
                   ) : null}
+                  {c.integration_type === "github" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() =>
+                          setGithubManager({ integrationId: c.id })
+                        }
+                      >
+                        Manage
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => void handleTestConnection(c)}
+                      >
+                        Test Connection
+                      </button>
+                    </>
+                  ) : null}
                   <button
                     type="button"
                     className="btn-danger"
@@ -1392,6 +1508,7 @@ function IntegrationsPanel({
             <option value="wordpress">WordPress</option>
             <option value="auth0">Auth0</option>
             <option value="stripe">Stripe</option>
+            <option value="github">GitHub</option>
             <option
               value="openclaw"
               disabled={localMode === false}
@@ -1496,6 +1613,24 @@ function IntegrationsPanel({
               Connect Stripe
             </button>
           </>
+        ) : addType === "github" ? (
+          <>
+            <p className="muted">
+              Connecting GitHub installs the AI Connect App on your account or
+              org, so Project Genesis can create repos there and manage issues +
+              pull requests. The wizard redirects you to GitHub.
+            </p>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => {
+                setGithubWizardInitialId(undefined);
+                setGithubWizardOpen(true);
+              }}
+            >
+              Connect GitHub
+            </button>
+          </>
         ) : (
           <button
             type="submit"
@@ -1592,6 +1727,32 @@ function IntegrationsPanel({
           getAccessTokenSilently={getAccessTokenSilently}
           integrationId={stripeManager.integrationId}
           onClose={() => setStripeManager(null)}
+        />
+      ) : null}
+
+      {githubWizardOpen ? (
+        <GitHubWizard
+          getAccessTokenSilently={getAccessTokenSilently}
+          initialInstallationId={githubWizardInitialId}
+          onClose={() => {
+            setGithubWizardOpen(false);
+            setGithubWizardInitialId(undefined);
+          }}
+          onConnected={() => void refresh()}
+          onManageIntegration={(integrationId) => {
+            setGithubWizardOpen(false);
+            setGithubWizardInitialId(undefined);
+            setGithubManager({ integrationId });
+            void refresh();
+          }}
+        />
+      ) : null}
+
+      {githubManager ? (
+        <GitHubIntegrationManager
+          getAccessTokenSilently={getAccessTokenSilently}
+          integrationId={githubManager.integrationId}
+          onClose={() => setGithubManager(null)}
         />
       ) : null}
 
@@ -2537,6 +2698,12 @@ export function App() {
   const handleTierLimit = useCallback<TierLimitHandler>((reason, limitHit) => {
     setUpgradePrompt({ reason, limitHit });
   }, []);
+  // Set from the ?github_installed=1&installation_id return URL; handed to
+  // IntegrationsPanel to open the GitHub wizard at its final step.
+  const [githubReturnInstallationId, setGithubReturnInstallationId] = useState<
+    number | undefined
+  >(undefined);
+  const [githubErrorMsg, setGithubErrorMsg] = useState<string | null>(null);
   const {
     isAuthenticated,
     isLoading,
@@ -2599,6 +2766,28 @@ export function App() {
       cancelled = true;
     };
   }, [isAuthenticated, getAccessTokenSilently]);
+
+  // Detect the return from GitHub's install flow. GitHub redirects the browser
+  // to /settings/integrations?github_installed=1&installation_id=<id> (or
+  // ?github_error=<reason>). Open settings, stash the id for IntegrationsPanel,
+  // and clean the URL so a refresh doesn't retrigger. Runs after the auth effect
+  // so its setShowSettings(true) wins on first mount.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("github_installed") === "1") {
+      const idStr = params.get("installation_id");
+      const id = idStr ? Number(idStr) : Number.NaN;
+      if (Number.isFinite(id) && id > 0) {
+        setShowSettings(true);
+        setGithubReturnInstallationId(id);
+      }
+      window.history.replaceState({}, "", window.location.pathname);
+    } else if (params.get("github_error")) {
+      setShowSettings(true);
+      setGithubErrorMsg(params.get("github_error"));
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
 
   return (
     <main className="page">
@@ -2701,6 +2890,18 @@ export function App() {
         {isAuthenticated && showSettings ? (
           <section className="settings-block">
             <h2>Settings</h2>
+            {githubErrorMsg ? (
+              <p className="error">
+                GitHub install failed: {githubErrorMsg}.{" "}
+                <button
+                  type="button"
+                  className="linklike"
+                  onClick={() => setGithubErrorMsg(null)}
+                >
+                  Dismiss
+                </button>
+              </p>
+            ) : null}
             <SubscriptionPanel
               getAccessTokenSilently={getAccessTokenSilently}
             />
@@ -2716,6 +2917,10 @@ export function App() {
             <IntegrationsPanel
               getAccessTokenSilently={getAccessTokenSilently}
               onTierLimit={handleTierLimit}
+              githubReturnInstallationId={githubReturnInstallationId}
+              onGithubReturnHandled={() =>
+                setGithubReturnInstallationId(undefined)
+              }
             />
             <PromptTester
               getAccessTokenSilently={getAccessTokenSilently}
