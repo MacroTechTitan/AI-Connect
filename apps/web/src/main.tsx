@@ -3,6 +3,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { AdminEntry } from "./admin/AdminEntry.js";
 import { App } from "./App.js";
+import { HelpApp } from "./help/HelpApp.js";
 import "./index.css";
 import { injectTokens } from "./ui/tokens.js";
 import { UiDemoPage } from "./ui/__demos__/UiDemoPage.js";
@@ -24,6 +25,12 @@ const isUiDemo =
 const isAdmin =
   window.location.pathname === "/admin" ||
   window.location.pathname.startsWith("/admin/");
+
+// The Help Center is public — no auth. Gated at the render root like /ui, and
+// rendered OUTSIDE the Auth0 wrapper.
+const isHelp =
+  window.location.pathname === "/help" ||
+  window.location.pathname.startsWith("/help/");
 
 // Shared Auth0 wrapper for the authenticated surfaces (app + admin).
 function withAuth0(children: React.ReactNode) {
@@ -48,6 +55,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     {isUiDemo ? (
       <UiDemoPage />
+    ) : isHelp ? (
+      <HelpApp />
     ) : isAdmin ? (
       withAuth0(<AdminEntry />)
     ) : (
