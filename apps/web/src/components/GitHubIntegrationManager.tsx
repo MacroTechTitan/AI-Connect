@@ -6,6 +6,7 @@ import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { Input } from "../ui/Input";
+import { HelpLink } from "./HelpLink";
 import { SessionExpiredNotice } from "./SessionExpiredNotice";
 
 const APP_INSTALL_URL =
@@ -258,7 +259,10 @@ export function GitHubIntegrationManager({
   return (
     <div className="ghm">
       <div className="ghm-head">
-        <h4>GitHub Integration</h4>
+        <h4>
+          GitHub Integration
+          <HelpLink articleId="github" label="Help — GitHub App" />
+        </h4>
         <button type="button" className="linklike" onClick={onClose}>
           Close
         </button>

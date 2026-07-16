@@ -15,6 +15,7 @@ import { OpenClawWizard } from "./components/OpenClawWizard";
 import { PricingPage } from "./components/PricingPage";
 import { SessionExpiredNotice } from "./components/SessionExpiredNotice";
 import { GitHubIntegrationManager } from "./components/GitHubIntegrationManager";
+import { HelpLink } from "./components/HelpLink";
 import { GitHubWizard } from "./components/GitHubWizard";
 import { StripeAccountManager } from "./components/StripeAccountManager";
 import { StripeWizard } from "./components/StripeWizard";
@@ -1286,7 +1287,10 @@ function IntegrationsPanel({
 
   return (
     <div className="settings-subsection">
-      <h3>Integrations</h3>
+      <h3>
+        Integrations
+        <HelpLink articleId="wordpress" label="Help — Connectors" />
+      </h3>
       <p className="muted">
         Connect external services (email, AI providers, WordPress) so AI
         Connect can wire them into projects it provisions for you.
@@ -2388,7 +2392,13 @@ function ProjectsPanel({
 
   return (
     <div className="settings-subsection">
-      <h3>Projects</h3>
+      <h3>
+        Projects
+        <HelpLink
+          articleId="project-genesis-overview"
+          label="Help — Project Genesis"
+        />
+      </h3>
       {projects === null && !listError ? (
         <p className="muted">Loading projects…</p>
       ) : null}
@@ -2898,7 +2908,13 @@ export function App() {
 
         {isAuthenticated && showSettings ? (
           <section className="settings-block">
-            <h2>Settings</h2>
+            <h2>
+              Settings
+              <HelpLink
+                articleId="what-is-ai-connect"
+                label="Help — Getting Started"
+              />
+            </h2>
             {githubErrorMsg ? (
               <p className="error">
                 GitHub install failed: {githubErrorMsg}.{" "}

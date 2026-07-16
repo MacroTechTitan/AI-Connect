@@ -15,6 +15,7 @@ import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { Modal } from "../ui/Modal";
+import { HelpLink } from "./HelpLink";
 import { SessionExpiredNotice } from "./SessionExpiredNotice";
 
 type SubscriptionPanelProps = {
@@ -118,7 +119,10 @@ export function SubscriptionPanel({
 
   return (
     <div className="settings-subsection">
-      <h3>Your subscription</h3>
+      <h3>
+        Your subscription
+        <HelpLink articleId="upgrading-to-pro" label="Help — Billing" />
+      </h3>
       {loadError ? <p className="error">{loadError}</p> : null}
       {sub === null && !loadError ? (
         <p className="muted">Loading…</p>

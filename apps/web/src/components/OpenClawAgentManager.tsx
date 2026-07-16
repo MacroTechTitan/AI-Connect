@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { authedFetch, isSessionExpired, type GetAccessToken } from "../lib/api";
+import { HelpLink } from "./HelpLink";
 import { SessionExpiredNotice } from "./SessionExpiredNotice";
 
 interface ManagerAgent {
@@ -252,7 +253,10 @@ export function OpenClawAgentManager({
     <div className="openclaw-mgr">
       <div className="openclaw-mgr-head">
         <div className="openclaw-mgr-title">
-          <h4>OpenClaw Agents</h4>
+          <h4>
+            OpenClaw Agents
+            <HelpLink articleId="openclaw" label="Help — OpenClaw" />
+          </h4>
           {bridgePath ? (
             <span className="openclaw-mgr-bridge">{bridgePath}</span>
           ) : null}

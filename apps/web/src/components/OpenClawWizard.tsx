@@ -8,6 +8,7 @@ import { Card } from "../ui/Card";
 import { Input } from "../ui/Input";
 import { Modal } from "../ui/Modal";
 import { Wizard, type WizardStep } from "../ui/Wizard";
+import { HelpLink } from "./HelpLink";
 import { SessionExpiredNotice } from "./SessionExpiredNotice";
 
 interface WizardAgent {
@@ -266,7 +267,13 @@ export function OpenClawWizard({
   const canGoNext = isWelcome ? true : bridgePath.trim().length > 0;
 
   return (
-    <Modal open onClose={onClose} size="md" title="Connect OpenClaw">
+    <Modal
+      open
+      onClose={onClose}
+      size="md"
+      title="Connect OpenClaw"
+      titleAccessory={<HelpLink articleId="openclaw" label="Help — OpenClaw" />}
+    >
       {sessionExpired ? (
         <SessionExpiredNotice />
       ) : (

@@ -7,6 +7,7 @@ import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { Modal } from "../ui/Modal";
 import { Wizard, type WizardStep } from "../ui/Wizard";
+import { HelpLink } from "./HelpLink";
 import { SessionExpiredNotice } from "./SessionExpiredNotice";
 
 interface ConnectedIntegration {
@@ -192,7 +193,13 @@ export function WordPressWizard({
   const canGoNext = step === "download" ? downloaded : true;
 
   return (
-    <Modal open onClose={onClose} size="md" title="Connect WordPress">
+    <Modal
+      open
+      onClose={onClose}
+      size="md"
+      title="Connect WordPress"
+      titleAccessory={<HelpLink articleId="wordpress" label="Help — WordPress" />}
+    >
       {sessionExpired ? (
         <SessionExpiredNotice />
       ) : (

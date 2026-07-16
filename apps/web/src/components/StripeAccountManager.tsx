@@ -5,6 +5,7 @@ import { authedFetch, isSessionExpired, type GetAccessToken } from "../lib/api";
 import { Badge, type BadgeVariant } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
+import { HelpLink } from "./HelpLink";
 import { SessionExpiredNotice } from "./SessionExpiredNotice";
 
 type StripeAccountStatus = "pending" | "active" | "restricted";
@@ -157,7 +158,10 @@ export function StripeAccountManager({
   return (
     <div className="sam">
       <div className="sam-head">
-        <h4>Stripe Connect Account</h4>
+        <h4>
+          Stripe Connect Account
+          <HelpLink articleId="stripe" label="Help — Stripe" />
+        </h4>
         <button type="button" className="linklike" onClick={onClose}>
           Close
         </button>

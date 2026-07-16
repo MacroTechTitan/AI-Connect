@@ -7,6 +7,7 @@ import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { Modal } from "../ui/Modal";
 import { Wizard, type WizardStep } from "../ui/Wizard";
+import { HelpLink } from "./HelpLink";
 import { SessionExpiredNotice } from "./SessionExpiredNotice";
 
 type StepId = "welcome" | "install" | "done";
@@ -238,7 +239,13 @@ export function GitHubWizard({
   }
 
   return (
-    <Modal open onClose={onClose} size="md" title="Connect GitHub">
+    <Modal
+      open
+      onClose={onClose}
+      size="md"
+      title="Connect GitHub"
+      titleAccessory={<HelpLink articleId="github" label="Help — GitHub App" />}
+    >
       {sessionExpired ? (
         <SessionExpiredNotice />
       ) : (

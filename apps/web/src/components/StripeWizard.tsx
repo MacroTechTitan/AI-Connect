@@ -7,6 +7,7 @@ import { Card } from "../ui/Card";
 import { Input } from "../ui/Input";
 import { Modal } from "../ui/Modal";
 import { Wizard, type WizardStep } from "../ui/Wizard";
+import { HelpLink } from "./HelpLink";
 import { SessionExpiredNotice } from "./SessionExpiredNotice";
 
 type BusinessType = "individual" | "company";
@@ -226,7 +227,13 @@ export function StripeWizard({
       : true;
 
   return (
-    <Modal open onClose={onClose} size="md" title="Connect Stripe">
+    <Modal
+      open
+      onClose={onClose}
+      size="md"
+      title="Connect Stripe"
+      titleAccessory={<HelpLink articleId="stripe" label="Help — Stripe" />}
+    >
       {sessionExpired ? (
         <SessionExpiredNotice />
       ) : (
