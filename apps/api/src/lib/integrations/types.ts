@@ -5,7 +5,8 @@ export type IntegrationType =
   | "wordpress"
   | "openclaw"
   | "auth0"
-  | "stripe";
+  | "stripe"
+  | "github";
 
 export type IntegrationStatus = "pending" | "validated" | "failed";
 
@@ -71,6 +72,25 @@ export type StripeConfig = {
   business_type?: "individual" | "company";
   country?: string;
 };
+/**
+ * GitHub integration configuration.
+ *
+ * installation_id — the numeric GitHub App installation ID. One installation
+ *   per (App, GitHub account). Points at the github_installations row that
+ *   carries the account metadata + permissions snapshot.
+ * account_login — GitHub org/user login (e.g., "MacroTechTitan").
+ * account_type — 'User' or 'Organization'.
+ * repository_selection — 'all' or 'selected'.
+ *
+ * NO M2M secret needed. GitHub App auth uses the server-side private key +
+ * per-installation tokens. Nothing to vault per-user.
+ */
+export type GithubConfig = {
+  installation_id: number;
+  account_login: string;
+  account_type: "User" | "Organization";
+  repository_selection: "all" | "selected";
+};
 export type IntegrationConfig =
   | SendGridConfig
   | OpenAiConfig
@@ -78,7 +98,8 @@ export type IntegrationConfig =
   | WordPressConfig
   | OpenClawConfig
   | Auth0Config
-  | StripeConfig;
+  | StripeConfig
+  | GithubConfig;
 
 /** Identity returned by the OpenClaw validator on success. Shaped to satisfy
  * IntegrationValidationResult.identity (Record<string, unknown>). */
@@ -115,6 +136,25 @@ export type StripeIdentity = {
   };
 };
 
+/** Identity returned by the GitHub validator on success. */
+export type GithubIdentity = {
+  installation_id: number;
+  account_login: string;
+  account_type: "User" | "Organization";
+  account_id: number;
+  repository_selection: "all" | "selected";
+  repo_count: number;
+  permissions_summary: {
+    contents?: string;
+    issues?: string;
+    pull_requests?: string;
+    administration?: string;
+    metadata?: string;
+    checks?: string;
+  };
+  suspended: boolean;
+};
+
 export type IntegrationValidationResult = {
   valid: boolean;
   errorMessage?: string;
@@ -135,6 +175,7 @@ export function isIntegrationType(value: unknown): value is IntegrationType {
     value === "wordpress" ||
     value === "openclaw" ||
     value === "auth0" ||
-    value === "stripe"
+    value === "stripe" ||
+    value === "github"
   );
 }

@@ -1,0 +1,27 @@
+.help-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--ai-radius-full);
+  background: var(--ai-color-neutral-100);
+  color: var(--ai-color-neutral-600);
+  text-decoration: none;
+  font-size: var(--ai-text-xs);
+  font-weight: var(--ai-weight-semibold);
+  margin-left: var(--ai-space-2);
+  vertical-align: middle;
+  transition:
+    background var(--ai-time-fast) var(--ai-ease-easeOut),
+    color var(--ai-time-fast) var(--ai-ease-easeOut);
+}
+
+.help-link:hover {
+  background: var(--ai-color-primary-100);
+  color: var(--ai-color-primary-700);
+}
+
+.help-link-icon {
+  line-height: 1;
+}

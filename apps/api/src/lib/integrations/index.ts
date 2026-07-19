@@ -10,6 +10,7 @@ import { wordpressValidator } from "./validators/wordpress.js";
 import { makeOpenClawValidator } from "./validators/openclaw.js";
 import { makeAuth0Validator } from "./validators/auth0.js";
 import { makeStripeValidator } from "./validators/stripe.js";
+import { makeGithubValidator } from "./validators/github.js";
 
 // Factory pattern: each entry takes a userId and returns a validator.
 // Types that don't need userId (sendgrid, wordpress) ignore it; types that do
@@ -24,6 +25,7 @@ const VALIDATOR_FACTORIES: Record<IntegrationType, ValidatorFactory> = {
   openclaw: makeOpenClawValidator,
   auth0: makeAuth0Validator,
   stripe: makeStripeValidator,
+  github: makeGithubValidator,
 };
 
 export function getIntegrationValidator(

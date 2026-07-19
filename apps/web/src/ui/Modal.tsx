@@ -8,6 +8,9 @@ export type ModalProps = {
   open: boolean;
   onClose: () => void;
   title?: string;
+  // Rendered next to the title in the header (e.g. a HelpLink "?"). Kept out of
+  // `title` so aria-label stays a plain string.
+  titleAccessory?: ReactNode;
   size?: ModalSize;
   closeOnBackdrop?: boolean;
   closeOnEscape?: boolean;
@@ -22,6 +25,7 @@ export function Modal({
   open,
   onClose,
   title,
+  titleAccessory,
   size = "md",
   closeOnBackdrop = true,
   closeOnEscape = true,
@@ -85,7 +89,14 @@ export function Modal({
       >
         {title || showCloseButton ? (
           <div className="ai-modal__head">
-            {title ? <h3 className="ai-modal__title">{title}</h3> : <span />}
+            {title ? (
+              <h3 className="ai-modal__title">
+                {title}
+                {titleAccessory}
+              </h3>
+            ) : (
+              <span />
+            )}
             {showCloseButton ? (
               <button
                 type="button"

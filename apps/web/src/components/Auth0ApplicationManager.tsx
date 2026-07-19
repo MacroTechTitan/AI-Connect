@@ -8,6 +8,7 @@ import { Card } from "../ui/Card";
 import { Input } from "../ui/Input";
 import { Modal } from "../ui/Modal";
 import { Pill } from "../ui/Pill";
+import { HelpLink } from "./HelpLink";
 import { SessionExpiredNotice } from "./SessionExpiredNotice";
 
 type Auth0AppType = "spa" | "native" | "regular_web" | "non_interactive";
@@ -471,7 +472,10 @@ export function Auth0ApplicationManager({
     <div className="a0m">
       <div className="a0m-head">
         <div className="a0m-title">
-          <h4>Auth0 Applications</h4>
+          <h4>
+            Auth0 Applications
+            <HelpLink articleId="auth0" label="Help — Auth0" />
+          </h4>
           {domain ? <span className="a0m-domain">{domain}</span> : null}
         </div>
         <button type="button" className="linklike" onClick={onClose}>

@@ -8,6 +8,7 @@ import { Card } from "../ui/Card";
 import { Input } from "../ui/Input";
 import { Modal } from "../ui/Modal";
 import { Wizard, type WizardStep } from "../ui/Wizard";
+import { HelpLink } from "./HelpLink";
 import { SessionExpiredNotice } from "./SessionExpiredNotice";
 
 interface Auth0App {
@@ -295,7 +296,13 @@ export function Auth0Wizard({
       : true;
 
   return (
-    <Modal open onClose={onClose} size="md" title="Connect Auth0">
+    <Modal
+      open
+      onClose={onClose}
+      size="md"
+      title="Connect Auth0"
+      titleAccessory={<HelpLink articleId="auth0" label="Help — Auth0" />}
+    >
       {sessionExpired ? (
         <SessionExpiredNotice />
       ) : (

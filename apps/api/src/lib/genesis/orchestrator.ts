@@ -7,6 +7,7 @@ import {
   projects,
   users,
 } from "../../db/schema.js";
+import { githubClient } from "../integrations/githubClient.js";
 import { logSystem } from "../logging.js";
 import {
   getCloudflareClient,
@@ -213,6 +214,43 @@ function manualCleanupUrl(
   }
 }
 
+// Sprint 10: deletes a repo that create_github_repo made via the user's GitHub
+// App installation (resourceId is the "owner/repo" full_name; installation_id
+// lives in the step details). Returns the same {deleted, errorMessage} shape as
+// the platform clients' deleteResource so the rollback loop treats it uniformly.
+async function deleteGithubRepoViaInstallation(
+  result: GenesisStepResult,
+): Promise<{ deleted: boolean; errorMessage?: string }> {
+  const fullName = result.resourceId;
+  const installationId =
+    typeof result.details?.installation_id === "number"
+      ? result.details.installation_id
+      : undefined;
+  if (!fullName || installationId === undefined) {
+    return {
+      deleted: false,
+      errorMessage:
+        "Missing repo full_name or installation_id for user-installation rollback.",
+    };
+  }
+  const [owner, repo] = fullName.split("/");
+  if (!owner || !repo) {
+    return {
+      deleted: false,
+      errorMessage: `Unparseable repo full_name: ${fullName}`,
+    };
+  }
+  try {
+    await githubClient.deleteRepo(installationId, owner, repo);
+    return { deleted: true };
+  } catch (err) {
+    return {
+      deleted: false,
+      errorMessage: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 // Reverse-order, best-effort teardown of everything the run created before the
 // failed step. Walks GENESIS_STEPS backwards from just before the failed step,
 // deleting each rollbackable success via its platform client. Most-recent-first
@@ -264,6 +302,14 @@ async function rollback(
         deleteResult = await getCloudflareClient().deleteSubdomainCname(
           resourceId,
         );
+      } else if (
+        platform === "github" &&
+        result.details?.created_via === "user_installation"
+      ) {
+        // Sprint 10: this repo was created via the user's GitHub App
+        // installation, so it lives in their org where the platform PAT has no
+        // access. Delete it via the installation token instead.
+        deleteResult = await deleteGithubRepoViaInstallation(result);
       } else {
         deleteResult = await getPlatformClient(platform).deleteResource(
           ctx.credentials[platform],

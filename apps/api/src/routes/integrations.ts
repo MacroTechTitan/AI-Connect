@@ -2,7 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import type { Express, Request, Response } from "express";
 
 import { getDb } from "../db/client.js";
-import { integrations } from "../db/schema.js";
+import { githubInstallations, integrations } from "../db/schema.js";
 import { getIntegrationValidator } from "../lib/integrations/index.js";
 import {
   auth0Client,
@@ -11,6 +11,10 @@ import {
   type CreateApplicationParams,
   type UpdateApplicationCallbacksParams,
 } from "../lib/integrations/auth0Client.js";
+import {
+  GithubError,
+  githubClient,
+} from "../lib/integrations/githubClient.js";
 import {
   openclawClient,
   OpenClawError,
@@ -22,6 +26,7 @@ import {
 import {
   isIntegrationType,
   type Auth0Config,
+  type GithubConfig,
   type IntegrationConfig,
   type IntegrationType,
   type OpenClawConfig,
@@ -252,6 +257,39 @@ async function handleAddIntegration(
       stripe_account_id: stripeAccountId,
       ...(businessType ? { business_type: businessType } : {}),
       ...(country ? { country } : {}),
+    };
+  } else if (integrationType === "github") {
+    // GitHub App: no per-user credential (server-side private key + per-
+    // installation tokens), so 'github' is NOT in credentialRequired. The
+    // config carries the installation metadata captured by the OAuth callback.
+    const installationId = configIn.installation_id;
+    if (typeof installationId !== "number" || !installationId) {
+      res.status(400).json({ error: "missing_installation_id" });
+      return;
+    }
+    const accountLogin = configIn.account_login;
+    if (typeof accountLogin !== "string" || accountLogin.length === 0) {
+      res.status(400).json({ error: "missing_account_login" });
+      return;
+    }
+    const accountType = configIn.account_type;
+    if (accountType !== "User" && accountType !== "Organization") {
+      res.status(400).json({ error: "invalid_account_type" });
+      return;
+    }
+    const repositorySelection = configIn.repository_selection;
+    if (
+      repositorySelection !== "all" &&
+      repositorySelection !== "selected"
+    ) {
+      res.status(400).json({ error: "invalid_repository_selection" });
+      return;
+    }
+    config = {
+      installation_id: installationId,
+      account_login: accountLogin,
+      account_type: accountType,
+      repository_selection: repositorySelection,
     };
   } else {
     // sendgrid — credential is the whole story.
@@ -1589,6 +1627,313 @@ async function handleGetStripeAccount(
   }
 }
 
+// ============================================================
+// GitHub App (installation-scoped repo / issue / PR operations)
+// ============================================================
+
+interface GithubTarget {
+  integration: { id: string };
+  config: GithubConfig;
+}
+
+// Resolves the github integration for req.params.id (org- + user-scoped) and
+// asserts it is a validated 'github' integration. Mirrors resolveStripeTarget.
+async function resolveGithubTarget(
+  req: Request,
+  res: Response,
+): Promise<GithubTarget | null> {
+  const ctx = getCtx(req);
+  const integrationId = req.params.id;
+  if (typeof integrationId !== "string" || !UUID_RE.test(integrationId)) {
+    res.status(404).json({
+      error: "integration_not_found",
+      message: "Integration not found or does not belong to this user.",
+    });
+    return null;
+  }
+
+  const [row] = await getDb()
+    .select({
+      id: integrations.id,
+      integrationType: integrations.integrationType,
+      config: integrations.config,
+      status: integrations.status,
+    })
+    .from(integrations)
+    .where(
+      and(
+        orgScopeFilter(integrations, ctx),
+        eq(integrations.id, integrationId),
+        eq(integrations.userId, ctx.userId),
+      ),
+    )
+    .limit(1);
+
+  if (!row) {
+    res.status(404).json({
+      error: "integration_not_found",
+      message: "Integration not found or does not belong to this user.",
+    });
+    return null;
+  }
+  if (row.integrationType !== "github") {
+    res.status(400).json({
+      error: "wrong_integration_type",
+      message: `Integration is type '${row.integrationType}', expected 'github'.`,
+    });
+    return null;
+  }
+  if (row.status !== "validated") {
+    res.status(400).json({
+      error: "integration_not_validated",
+      message: `Integration has status '${row.status}'. Run validation first.`,
+    });
+    return null;
+  }
+
+  return { integration: { id: row.id }, config: row.config as GithubConfig };
+}
+
+// Maps a GithubError to an HTTP status. Anything non-GithubError is rethrown
+// for the global handler (matches handleStripeConnectError / handleAuth0Error).
+function handleGithubConnectError(err: unknown, res: Response): void {
+  if (err instanceof GithubError) {
+    const statusByCode: Record<string, number> = {
+      installation_not_found: 404,
+      installation_suspended: 403,
+      repo_not_found: 404,
+      permissions_missing: 403,
+      invalid_credentials: 500,
+      rate_limited: 429,
+      invalid_request: 400,
+      api_error: 502,
+      network_error: 502,
+      webhook_signature_invalid: 400,
+    };
+    const status = statusByCode[err.code] ?? 502;
+    res.status(status).json({ error: err.code, message: err.message });
+    return;
+  }
+  throw err;
+}
+
+// GET /api/integrations/:id/github/repositories — repos the installation can reach.
+async function handleListGithubRepositories(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const target = await resolveGithubTarget(req, res);
+  if (!target) return;
+
+  try {
+    const repos = await githubClient.getInstallationRepos(
+      target.config.installation_id,
+    );
+    res.json({
+      repositories: repos.map((r) => ({
+        id: r.id,
+        name: r.name,
+        full_name: r.full_name,
+        private: r.private,
+        html_url: r.html_url,
+        default_branch: r.default_branch,
+        description: r.description,
+      })),
+    });
+  } catch (err) {
+    handleGithubConnectError(err, res);
+  }
+}
+
+// POST /api/integrations/:id/github/issues — create an issue in a repo.
+async function handleCreateGithubIssue(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const target = await resolveGithubTarget(req, res);
+  if (!target) return;
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const { owner, repo, title, body: issueBody, labels } = body;
+
+  if (typeof owner !== "string" || owner.length === 0) {
+    res.status(400).json({ error: "owner_required", message: "owner is required" });
+    return;
+  }
+  if (typeof repo !== "string" || repo.length === 0) {
+    res.status(400).json({ error: "repo_required", message: "repo is required" });
+    return;
+  }
+  if (typeof title !== "string" || title.length === 0) {
+    res.status(400).json({ error: "title_required", message: "title is required" });
+    return;
+  }
+
+  try {
+    const issue = await githubClient.createIssue(target.config.installation_id, {
+      owner,
+      repo,
+      title,
+      body: typeof issueBody === "string" ? issueBody : undefined,
+      labels: Array.isArray(labels)
+        ? labels.filter((l): l is string => typeof l === "string")
+        : undefined,
+    });
+
+    await logSystem("info", "github", "issue_created", {
+      integration_id: target.integration.id,
+      installation_id: target.config.installation_id,
+      owner,
+      repo,
+      issue_number: issue.number,
+    });
+
+    res.status(201).json({ number: issue.number, html_url: issue.html_url });
+  } catch (err) {
+    handleGithubConnectError(err, res);
+  }
+}
+
+// POST /api/integrations/:id/github/pull-requests — create a pull request.
+async function handleCreateGithubPullRequest(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const target = await resolveGithubTarget(req, res);
+  if (!target) return;
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const { owner, repo, title, head, base, body: prBody, draft } = body;
+
+  if (typeof owner !== "string" || owner.length === 0) {
+    res.status(400).json({ error: "owner_required", message: "owner is required" });
+    return;
+  }
+  if (typeof repo !== "string" || repo.length === 0) {
+    res.status(400).json({ error: "repo_required", message: "repo is required" });
+    return;
+  }
+  if (typeof title !== "string" || title.length === 0) {
+    res.status(400).json({ error: "title_required", message: "title is required" });
+    return;
+  }
+  if (typeof head !== "string" || head.length === 0) {
+    res
+      .status(400)
+      .json({ error: "head_required", message: "head branch is required" });
+    return;
+  }
+  if (typeof base !== "string" || base.length === 0) {
+    res
+      .status(400)
+      .json({ error: "base_required", message: "base branch is required" });
+    return;
+  }
+
+  try {
+    const pr = await githubClient.createPullRequest(
+      target.config.installation_id,
+      {
+        owner,
+        repo,
+        title,
+        head,
+        base,
+        body: typeof prBody === "string" ? prBody : undefined,
+        draft: Boolean(draft),
+      },
+    );
+
+    await logSystem("info", "github", "pull_request_created", {
+      integration_id: target.integration.id,
+      installation_id: target.config.installation_id,
+      owner,
+      repo,
+      pr_number: pr.number,
+    });
+
+    res.status(201).json({ number: pr.number, html_url: pr.html_url });
+  } catch (err) {
+    handleGithubConnectError(err, res);
+  }
+}
+
+// POST /api/integrations/:id/github/test-connection — ping the installation.
+async function handleGithubTestConnection(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const target = await resolveGithubTarget(req, res);
+  if (!target) return;
+
+  try {
+    const result = await githubClient.testConnection(
+      target.config.installation_id,
+    );
+    res.json(result);
+  } catch (err) {
+    handleGithubConnectError(err, res);
+  }
+}
+
+// GET /api/integrations/github/installation/:installationId — hydrates the
+// installation metadata (login/type/repo-selection) the wizard needs to build
+// the integration config after the user returns from GitHub's install flow.
+// Scoped to the owning user. Distinct from the /:id/github/* routes — the
+// second path segment is the literal "github", so it never collides.
+async function handleGetInstallationForWizard(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const ctx = getCtx(req);
+  const installationId = Number(req.params.installationId);
+
+  if (!Number.isFinite(installationId) || installationId <= 0) {
+    res.status(400).json({ error: "invalid_installation_id" });
+    return;
+  }
+
+  const [installation] = await getDb()
+    .select({
+      installationId: githubInstallations.installationId,
+      accountLogin: githubInstallations.accountLogin,
+      accountType: githubInstallations.accountType,
+      repositorySelection: githubInstallations.repositorySelection,
+      suspendedAt: githubInstallations.suspendedAt,
+    })
+    .from(githubInstallations)
+    .where(
+      and(
+        eq(githubInstallations.installationId, installationId),
+        eq(githubInstallations.userId, ctx.userId),
+      ),
+    )
+    .limit(1);
+
+  if (!installation) {
+    res.status(404).json({
+      error: "installation_not_found",
+      message: "Installation not found or does not belong to you.",
+    });
+    return;
+  }
+
+  if (installation.suspendedAt) {
+    res.status(400).json({
+      error: "installation_suspended",
+      message: "This installation is suspended on GitHub.",
+    });
+    return;
+  }
+
+  res.json({
+    installation_id: installation.installationId,
+    account_login: installation.accountLogin,
+    account_type: installation.accountType,
+    repository_selection: installation.repositorySelection,
+  });
+}
+
 export function registerIntegrationsRoutes(app: Express): void {
   app.post(
     "/api/integrations",
@@ -1730,5 +2075,39 @@ export function registerIntegrationsRoutes(app: Express): void {
     requireAuth,
     requireHydratedUser,
     handleGetStripeAccount,
+  );
+
+  // GitHub App — operate on a validated 'github' integration via
+  // resolveGithubTarget. Installs happen via the OAuth flow (routes/githubOAuth),
+  // not here; these routes act on an already-linked installation.
+  app.get(
+    "/api/integrations/:id/github/repositories",
+    requireAuth,
+    requireHydratedUser,
+    handleListGithubRepositories,
+  );
+  app.post(
+    "/api/integrations/:id/github/issues",
+    requireAuth,
+    requireHydratedUser,
+    handleCreateGithubIssue,
+  );
+  app.post(
+    "/api/integrations/:id/github/pull-requests",
+    requireAuth,
+    requireHydratedUser,
+    handleCreateGithubPullRequest,
+  );
+  app.post(
+    "/api/integrations/:id/github/test-connection",
+    requireAuth,
+    requireHydratedUser,
+    handleGithubTestConnection,
+  );
+  app.get(
+    "/api/integrations/github/installation/:installationId",
+    requireAuth,
+    requireHydratedUser,
+    handleGetInstallationForWizard,
   );
 }

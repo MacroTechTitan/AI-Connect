@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 import { authedFetch, isSessionExpired, type GetAccessToken } from "../lib/api";
+import { HelpLink } from "./HelpLink";
 import { SessionExpiredNotice } from "./SessionExpiredNotice";
 
 interface WpModule {
@@ -223,7 +224,10 @@ export function WordPressModuleManager({
   return (
     <div className="wp-module-manager">
       <div className="wp-module-manager-head">
-        <h4>Modules — {siteUrl}</h4>
+        <h4>
+          Modules — {siteUrl}
+          <HelpLink articleId="wordpress" label="Help — WordPress" />
+        </h4>
         <button type="button" className="linklike" onClick={onClose}>
           Close
         </button>
