@@ -570,6 +570,168 @@ NOT YET EXECUTED. Sprint 9 shipped from a code perspective; live verification aw
 - Message history persistence for OpenClaw (Sprint 7 deferral)
 - Deeper accessibility work
 
+## Sprint 10 — Help Center + Admin UIs + GitHub App Connector (2026-07-19)
+
+- Branch: sprint/10-help-center-admin-github-app
+- Merged via PR #17 on 2026-07-19
+- 18 commits (a20f25c → 4e4f88c)
+
+### What shipped
+
+Three intertwined tracks:
+
+- **Track A** — Help Center at /help. In-app documentation with 12 articles across 5 categories, sidebar navigation, URL-hash deep linking, ? help links from every panel + wizard + integration manager (13 sites, 8 distinct article IDs).
+- **Track B** — Admin UIs at /admin. is_admin boolean gate + requireAdmin middleware + 11 admin API routes + 6-section admin dashboard covering users, subscriptions, integrations, logs, and webhooks (Stripe + GitHub).
+- **Track C** — GitHub App connector. Real GitHub App at github.com/apps/ai-connect-app (not OAuth). Users install the App on their org or account. Server-side JWT auth with App private key + short-lived installation tokens. Webhook infrastructure parallel to Stripe. Wired into Project Genesis with per-template flag gating (Path A unreachable in v1 to prevent empty-repo failure mode).
+
+### Migrations
+
+- 0013 (`0013_sticky_puff_adder.sql`): is_admin boolean column on users (default false, NOT NULL). Foundation for admin UIs.
+- 0014 (`0014_wealthy_yellowjacket.sql`): github_installations (11 cols: id uuid PK, installation_id bigint unique, user_id fk cascade, account_login, account_type CHECK 'User'/'Organization', account_id bigint, repository_selection CHECK 'all'/'selected', permissions jsonb, suspended_at, created_at, updated_at + index on user_id) + github_webhook_events (7 cols: id text PK = X-GitHub-Delivery, event_type, received_at, processed, processed_at, processing_error, payload jsonb + indexes on event_type + received_at) + integrations.integration_type CHECK extended to include 'github'. Note: the DROP CONSTRAINT on integrations_integration_type_check is unguarded (no IF EXISTS, no DO-block), unlike the FK add in the same file — a partial re-run fails on that statement.
+- 0015 (`0015_typical_harrier.sql`): projects.repo_owner_org (text, nullable) tracks which GitHub org a Genesis-provisioned repo lives in. Legacy projects have null. Shipped inside commit 7a6a85e rather than as a standalone migration commit.
+- All three migrations applied to AI Connect Supabase manually via SQL editor per established pattern.
+
+### Backend
+
+- apps/api/src/lib/integrations/githubClient.ts — GithubClient class wrapping GitHub App auth. App JWT via @octokit/app 16.x (constructor uses conditional object spreads for oauth/webhooks config to satisfy v16 Options type — NOT undefined-as-any). Per-installation in-process token cache: entries are reused until 5min before GitHub's returned expires_at (TOKEN_TTL_BUFFER_MS), giving ~55min effective TTL against GitHub's 60min tokens — the 55 is derived, not a configured constant. Cache is per API instance, so a restart or redeploy clears it. REST wrappers via @octokit/rest 22.x: getInstallation, getInstallationRepos, createRepo (createInOrg for Organization vs createForAuthenticatedUser for User), createIssue, createPullRequest, testConnection, deleteRepo. OAuth flow: exchangeOAuthCode (POST /login/oauth/access_token), getAuthenticatedUser. Webhook signature verification via @octokit/webhooks-methods 6.x verify. GithubError typed with 10-code union (invalid_credentials, installation_not_found, installation_suspended, repo_not_found, permissions_missing, rate_limited, invalid_request, api_error, network_error, webhook_signature_invalid). GithubError.cause has override modifier (ES2022 Error.cause collision). All catches use unknown + narrowing to match strict tsc config. Lazy App instantiation — GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY optional in dev, throws GithubError on first use.
+- apps/api/src/routes/githubWebhook.ts — POST /api/github/webhook mounted with express.raw({type:'application/json'}) BEFORE express.json() so signature verification has the raw body. Idempotency via isUniqueViolation helper (PG error code 23505, matches Sprint 9 pattern) — duplicates return 200 {received:true, duplicate:true}. GithubWebhookPayload interface (not any). verifyWebhookSignature wrapped so missing-secret returns 500 webhook_not_configured instead of unhandled rejection; a missing signature header and a wrong signature both return 400 invalid_signature (distinguishable only via the signature_verification_failed log). Installation lifecycle handlers: installation.created refreshes permissions if row exists (else logs — the OAuth callback creates the row); installation.deleted deletes the row; suspend/unsuspend toggle suspended_at. Asymmetry worth knowing: created/deleted throw on a missing installation.id (surfacing as 500 handler_failed, so GitHub retries) while suspend/unsuspend silently return. installation_repositories logged only (repos fetched on-demand). Repo activity events (push, pull_request, issues, issue_comment, pull_request_review, pull_request_review_comment, pull_request_review_thread, check_run, check_suite) stubbed as stub_bot_event logs — Sprint 11+ Maximus AI bot logic.
+- apps/api/src/lib/integrations/githubOAuthState.ts — HMAC-signed state parameter helpers (encodeState/verifyState) for CSRF protection on OAuth install flow. base64url(user_id) + '.' + hmac_sha256_signature format. Constant-time HMAC comparison. Uses dedicated GITHUB_STATE_SIGNING_KEY env var (NOT overloading MASTER_KEY vault AES key).
+- apps/api/src/routes/githubOAuth.ts — GET /api/github/install (requireAuth) returns JSON {install_url} for authedFetch (NOT 302 — fix to Commit 6 which had a redirect chain that couldn't carry Auth0 bearer). GET /api/github/oauth/callback (public, HMAC state gate) — verifies state (constant-time), extracts installation_id, best-effort OAuth code exchange (continues on failure — installation still valid), fetches installation via getInstallation, upserts github_installations row linking user_id ↔ installation_id, redirects to /settings/integrations?github_installed=1&installation_id=<id> or ?github_error=<reason> on failure. Five error reasons: missing_state, invalid_state, missing_installation_id, invalid_installation_id, installation_fetch_failed. resolveWebOrigin uses request Origin header with DEFAULT_WEB_APP_URL constant fallback (WEB_APP_URL env var NOT introduced — Sprint 10.5+ deferral). Because GitHub's redirect is a top-level navigation carrying no Origin header, the fallback always wins in practice, which is what makes the install→callback round trip prod-only.
+- apps/api/src/lib/integrations/types.ts — IntegrationType += 'github'. GithubConfig {installation_id, account_login, account_type ('User'|'Organization'), repository_selection ('all'|'selected')}. GithubIdentity {installation_id, account_login, account_type, account_id, repository_selection, repo_count, permissions_summary, suspended}. Extended IntegrationConfig union + isIntegrationType guard.
+- apps/api/src/lib/integrations/validators/github.ts — makeGithubValidator(userId) factory matching makeStripeValidator signature (not spec's {type, validate(config)} shape). Confirms github_installations row exists first (from OAuth callback), then getInstallation live check with installation_not_found / installation_suspended mapping, then getInstallationRepos count (non-fatal on failure).
+- apps/api/src/routes/integrations.ts — 'github' config branch in handleAddIntegration validates installation_id numeric + account_login string + account_type in enum + repository_selection in enum. NOT added to credentialRequired (no per-user secret; App private key is server-side). Four operational routes (all requireAuth + requireHydratedUser + resolveGithubTarget for org scoping + type/status validation): GET /:id/github/repositories, POST /:id/github/issues, POST /:id/github/pull-requests, POST /:id/github/test-connection. handleGithubConnectError maps GithubError codes to HTTP (installation_not_found → 404, suspended → 403, repo_not_found → 404, permissions_missing → 403, rate_limited → 429, etc.), defaulting to 502 for unmapped codes. Wizard hydrate endpoint added: GET /api/integrations/github/installation/:installationId returns installation details for the wizard's step 3, user-scoped — note its hand-written DB checks shadow the GithubError codes of the same name with different statuses (installation_suspended returns 400 there, 403 on the operational routes).
+- apps/api/src/lib/genesis/steps.ts — create_github_repo step gains Path A/B fork. Path A: findUserGithubInstallation → githubClient.createRepo in user's org. Path B: existing platform-credential GitHub PAT flow preserved byte-for-byte, renamed to createGithubRepoViaPlatform — the destination org is whatever the configured PAT resolves to (MacroTechTitan on the standard operator credential), not a hardcoded constant. Shared helper createGithubRepoViaPlatformAndRecordOwner records repo_owner_org on every path. Path A GATED behind per-template supportsGithubAppPath flag (commit 5de2156). All v1 templates (html-js, sveltekit, nextjs) default supportsGithubAppPath=false, so Path A is UNREACHABLE in v1 — prevents empty-repo failure mode (Path A creates repos without template scaffolding; Render's first deploy would fail on empty repo). Skip logs "GitHub App path skipped (template unsupported) for project <id>" with camelCase userHasGithubIntegration metadata key track latent demand.
+- apps/api/src/lib/genesis/orchestrator.ts — rollback fork: created_via==='user_installation' uses githubClient.deleteRepo (installation token, requires administration:write permission — granted at App creation); else uses existing platform PAT logic.
+- apps/api/src/middleware/requireAdmin.ts — runs AFTER requireAuth + requireHydratedUser. Reads users.is_admin from the DB on every request (never cached in the JWT), so a revoke takes effect on the next request rather than at token expiry. 403 admin_required if false. Audit logs admin_access (info) on success + unauthorized_admin_access (warn) on failure. Both include user_id, path, method.
+- apps/api/src/routes/admin.ts — 11 admin routes (extended existing bearer-token-gated /api/admin/diagnostics file in-place, preserving diagnostics handler + registration untouched — diagnostics stays gated by requireDiagnosticsToken, not is_admin). All routes: requireAuth + requireHydratedUser + requireAdmin. parsePagination helper clamps limit 1-100 (default 50) and floors offset at 0 — a limit=1000 request silently returns 100. getCtx local helper (not (req as any).user). pathParam() helper narrows req.params typing.
+  - GET /api/admin/dashboard: aggregate counts (users total/pro/free, integrations, projects).
+  - GET /api/admin/users (query: limit, offset, admins_only): paginated list with tier + status join.
+  - GET /api/admin/users/:id: single user with subscription details + integration count + subscriptionId (added for admin UI's force-cancel).
+  - PATCH /api/admin/users/:id/tier (body {tier: 'free'|'pro'}): upserts subscription row, audit logs user_tier_changed with admin_user_id + target_user_id + target_user_email + new_tier. Note mutation handlers key the actor as admin_user_id while requireAdmin keys it as user_id.
+  - GET /api/admin/subscriptions (query: limit, offset, tier, status): filtered list.
+  - POST /api/admin/subscriptions/:id/cancel: force cancel via Stripe SDK cancelSubscription (immediate, not at period end), then marks canceled locally — a full downgrade setting tier='free', status='canceled', nulling stripe_subscription_id + current_period_end and clearing cancel_at_period_end. Handles already-canceled Stripe subscriptions gracefully (subscription_not_found proceeds; other Stripe failures abort with 502 leaving the local row untouched). Audit logs subscription_force_canceled.
+  - GET /api/admin/integrations (query: limit, offset, type, status): filtered list. Exposes integrations.config (identity column doesn't exist).
+  - GET /api/admin/logs (query: limit, offset, category, level, from, to): paginated system_logs viewer with filters.
+  - GET /api/admin/webhooks/stripe (query: limit, offset, event_type, processed): filtered list.
+  - POST /api/admin/webhooks/stripe/:id/retry: resets processed=false, processed_at=null, processing_error=null. Does NOT re-invoke the handler — Stripe's own retry or a Dashboard resend is what re-processes. Sync retry deferred to Sprint 10.5+. Audit logs stripe_webhook_reset_for_retry.
+  - GET /api/admin/webhooks/github (query: limit, offset, event_type, processed): filtered list. No retry route (GET-only).
+
+### Frontend
+
+- apps/web/src/components/GitHubWizard.tsx + .css — 3-step wizard (Welcome, Install, Done) on Sprint 8 design system primitives. Step 2 fetches signed install URL via authedFetch, navigates browser to GitHub. Step 3 hydrates installation via GET /api/integrations/github/installation/:installationId, POSTs /api/integrations to create the integration, shows summary Card with account info + repo count. 409 handling reuses existing github integration. onConnected/onManageIntegration handoff matches Stripe wizard.
+- apps/web/src/components/GitHubIntegrationManager.tsx + .css — single-pane panel. Account status Card (account_login + type Badge + repo_selection + repo_count + suspended flag). Repository list Cards with Open-in-GitHub links. Actions: Test Connection (POST /:id/github/test-connection), Reinstall App (link to https://github.com/apps/ai-connect-app/installations/new), Manage on GitHub (link to https://github.com/settings/installations). Try It section: create-issue form (owner from account_login default, repo input, title, body) → POST /:id/github/issues → success shows Issue #N created with link.
+- apps/web/src/App.tsx — 'github' in IntegrationsPanel type selector + label + describeIntegrationIdentity (Connected to {account_login} ({account_type}) / Suspended for suspended installations). handleTestConnection dispatches POST github/test-connection for github rows. Mount effect on Settings/Integrations detects ?github_installed=1&installation_id return from OAuth callback, opens GitHubWizard pre-advanced to step 3 with hydrated installation, cleans URL. ?github_error handling shows error banner and cleans URL.
+- apps/web/src/admin/ — full admin tree:
+  - AdminApp.tsx — root: sidebar + section renderer.
+  - AdminEntry.tsx — Auth0 gate wrapping (loading / signed-out → AdminApp), keeps main.tsx simple.
+  - shared/adminApi.ts (adminFetch + adminMutate + AdminApiError with status-aware behavior + isAdminForbidden helper for the 403 case — built on the app's existing authedFetch helper, not bespoke fetch).
+  - shared/AdminSidebar.tsx (nav).
+  - shared/SectionState.tsx (SectionError → "no admin access" on 403, SectionLoading).
+  - shared/formatters.ts (date + tier/status/level badge variants + truncate).
+  - sections/ (Dashboard, Users, Subscriptions, Integrations, Logs, Webhooks — all built with semantic <table> + token CSS, deviation from spec's Card-per-row AdminTable).
+  - Users section: paginated + admins_only filter; row click opens detail modal with Change Tier (opens sub-modal with tier dropdown → PATCH) and Cancel Subscription (confirmation → POST) actions.
+  - Subscriptions section: tier/status filters; force-cancel per active row.
+  - Integrations section: type/status filters; row click opens read-only config JSON modal.
+  - Logs section: category/level/from/to filters, expandable context, "Show older" pagination.
+  - Webhooks section: Stripe/GitHub tabs, event_type/processed filters, expandable payloads. Stripe rows have Retry button with confirmation dialog explaining v1 reset-only behavior.
+- apps/web/src/main.tsx — /admin and /help path gates at render root (parallel to existing /ui), each matching the bare path or any subpath. /admin is INSIDE Auth0 wrapper. /help is OUTSIDE Auth0 wrapper (public).
+- apps/web/src/App.tsx — Admin nav link visible to all (backend 403s non-admins). Help nav link visible to all.
+- apps/web/src/help/ — Help Center:
+  - HelpApp.tsx — root with URL-hash deep linking (window.location.hash on mount + hashchange listener). Selecting article updates hash via replaceState, so selections don't stack history entries. An unknown hash on mount falls back to ARTICLES[0]; an unknown hash arriving via hashchange is ignored and the current article stays selected.
+  - HelpSidebar.tsx — category-grouped nav ordered: Getting Started → Connectors → Project Genesis → Billing → Advanced.
+  - HelpArticleRenderer.tsx — markdown → HTML via marked (18.0.6, GFM enabled, breaks:false) + DOMPurify (3.4.12) sanitization with target/rel allowed so external links open safely in a new tab.
+  - articles/index.ts — 12-article registry (3 getting-started, 5 connectors, 1 project-genesis, 2 billing, 1 advanced) + getArticleById.
+  - articles/types.ts — Article type + ArticleCategory + CATEGORY_LABELS + CATEGORY_ORDER.
+  - articles/vite-md.d.ts — declare module '*.md?raw' type declaration.
+  - articles/*.md — 12 markdown files bundled via Vite's ?raw imports.
+  - shared/formatMarkdown.ts — marked + DOMPurify wrapper.
+- apps/web/src/components/HelpLink.tsx + .css — reusable ? icon button (small circle with ? char). Opens /help#<articleId> in new tab (target='_blank', rel='noopener noreferrer'). Optional label prop sets tooltip/aria-label, defaulting to "Help — <articleId with dashes as spaces>". Wired to 13 sites across 8 distinct article IDs: IntegrationsPanel → wordpress (labelled "Help — Connectors"; there is no connectors-landing article), ProjectsPanel → project-genesis-overview, SettingsPanel → what-is-ai-connect, SubscriptionPanel → upgrading-to-pro, each connector wizard + integration manager to its own article. Four articles (your-first-project, understanding-tiers, managing-your-subscription, openclaw-local-mode) have no ? link and are sidebar-only by design.
+
+### Docs
+
+- docs/GITHUB_CONNECTOR.md — developer guide. Architecture (single-instance App, JWT + installation token auth layers, webhook infrastructure), env vars + GitHub-side setup steps, DB schema, install flow walkthrough, Project Genesis integration (Path A/B fork + template gate), operational routes + error code → HTTP map, security model, deferred items, testing pointer. Header convention matches STRIPE_CONNECTOR.md and AUTH0_CONNECTOR.md (# AI Connect GitHub App Connector, ## What's not in v1, ## Source code reference). 5 drift corrections against spec: skip log is a message string with camelCase key (not snake_case log name), added 5th route (hydrate-installation), middleware description corrected (resolveGithubTarget is in-handler, not middleware), added installation_repositories + check_suite to webhook list, Path A falls back to Path B on create failure not only on template gate.
+- docs/ADMIN.md — admin operations guide. Overview of is_admin gating, SQL for granting/revoking, full admin API surface (11 routes with actual paths + params), audit log names, admin UI structure, common admin task walkthroughs (grandfather, force cancel, retry webhook, investigate), debugging via logSystem categories, deferred to Sprint 10.5+. Bundle size claim (600.81 kB, over Vite's 500 kB threshold) verified by build.
+- docs/HELP_CENTER.md — developer guide for adding articles. Article registry structure, adding new article walkthrough, deep linking via URL hash, content style guidelines, bundling considerations, source code reference.
+- docs/sprints/SPRINT_10_TESTING.md — smoke test plan sections A-K. Acceptance gate: A+B+C+H+J+K must fully pass. D+E+F+G+I verifiable post-merge on live system (require deployed GitHub App + Auth0 + Stripe test mode). Corrected 6 items from spec: WEB_APP_URL doesn't exist (structural prod-only limitation for D/E via Origin header + DEFAULT_WEB_APP_URL fallback), Section B untestable as spec (getAppJwt doesn't exist — @octokit/app handles JWT; getInstallationToken module-private — B rewritten to test observable route behavior), 55-min TTL is not a constant (derives from expires_at - TOKEN_TTL_BUFFER_MS 5min), Path B doesn't hardcode MacroTechTitan (owner from creator PAT), /api/github/install returns JSON not 302, F5 wizard route shadows GithubError codes (suspended → 400 vs 403 elsewhere).
+
+### Why this matters
+
+Sprint 10 rounds out AI Connect as a real multi-user product. Before Sprint 10, users had no in-app documentation, no way for Joseph to see across all users' state, and every Genesis-provisioned repo lived under github.com/MacroTechTitan/... After Sprint 10, users have in-app help with deep links from every panel, Joseph (or future admins) has a full dashboard for user + subscription + integration + logs + webhook management, and users can install the AI Connect GitHub App on their own orgs (though template scaffolding to make Path A actually deploy successfully is Sprint 10.5+ work).
+
+Sprint 10 is also the sprint where AI Connect's admin surface matures from raw SQL queries to a real UI — a real quality-of-life win for Joseph as the sole operator.
+
+### Smoke test (deferred to first opportunity)
+
+Sprint 10 smoke test plan in docs/sprints/SPRINT_10_TESTING.md. Sections A + B + C + H + J + K acceptance gate can be verified in dev (migrations, JWT/webhook internals, admin routes with is_admin=true seed, Help Center rendering + deep linking). Sections D + E + F + G + I need a real GitHub App on a test account, Auth0 M2M creds, Stripe test-mode setup, plus prod deploy (install→callback round trip is structurally prod-only — see the resolveWebOrigin note above).
+
+NOT YET EXECUTED. Sprint 10 shipped from code perspective; live verification deferred to retroactive session covering Sprints 7-10 all at once.
+
+### What's NOT done (deferred to Sprint 10.5+ / Sprint 11+)
+
+Sprint 10.5+:
+
+- Bundle optimization (dynamic imports for /help and /admin to code-split marked + dompurify + admin code out of main chunk — currently 600.81 kB main bundle)
+- WEB_APP_URL env var (currently DEFAULT_WEB_APP_URL constant with request Origin header override — real limitation for local dev testing of install→callback round trip)
+- Origin header allowlist in resolveWebOrigin (currently trusts attacker-controllable Origin header — real security concern before customer-facing prod)
+- Auto-redeploy Render service after AUTH0_* / STRIPE_* env sync — Sprint 8 + Sprint 9 deferral rolled forward
+- Per-project Stripe Restricted Keys — Sprint 9 deferral
+- Reusing existing Stripe Connected Accounts across projects — Sprint 9 deferral
+- Multi-tenant Auth0 support — Sprint 8 deferral
+- Real per-project AUTH0_AUDIENCE — Sprint 8 deferral
+- Auth0 user management, connections config, Actions/Rules — Sprint 8 deferral
+- Delete Auth0/Stripe application/account UX — Sprint 8+9 deferral
+- Search/filter in application/account managers — Sprint 8+9 deferral
+- Auth0/Stripe managers full accessibility work — Sprint 8+9 deferral
+- Admin: charts and visualizations — currently tables only
+- Admin: bulk actions — currently one row at a time
+- Admin: CSV export
+- Admin: user search (email, name)
+- Admin: sortable columns — currently fixed sort by created_at desc
+- Admin: real-time updates for logs (SSE/websocket)
+- Admin: synchronous webhook re-processing (currently resets only)
+- Admin: GitHub webhook retry route (Stripe has one; GitHub is GET-only in v1)
+- Admin: admin-granting UI (SQL-only by design in v1)
+- Help Center: text search across articles
+- Help Center: content rewritten for non-developer audience (currently ports developer docs verbatim)
+- Help Center: screenshots and images
+- Help Center: article versioning / changelog
+- Help Center: static hosted docs site (in addition to in-app)
+- GitHub App: PR creation UI in Manager (API supports it; v1 has issue form only)
+- GitHub App: reconciliation for orphan installations (OAuth callback never ran)
+- GitHub App: repo selection UI (add/remove specific repos from installation)
+- GitHub App: uninstall from AI Connect UI (currently must go to GitHub)
+- GitHub App: setup_action=update handled separately (v1 treats as install)
+- Message history persistence for OpenClaw — Sprint 7 deferral
+- Full theme switcher — Sprint 8 deferral
+- Storybook proper — Sprint 8 deferral
+- Team / Enterprise tiers beyond Free + Pro — Sprint 9 deferral
+- Annual billing option — Sprint 9 deferral
+- Promo codes / discounts / trial periods — Sprint 9 deferral
+- Multi-tenant subscriptions (org-wide) — Sprint 9 deferral
+- Global fetch wrapper to centralize 403 tier_upgrade_required handling — Sprint 9 deferral
+
+Sprint 11+:
+
+- Template scaffolding via installation token (unlocks Path A — checkout template contents, push to user's new repo via installation, then flip supportsGithubAppPath=true per template)
+- Real bot behavior for repo-activity webhooks (push, PR, issues, check_run) — currently all stubbed as stub_bot_event logs
+- **Maximus AI skills integration** — connect AI Connect to the Maximus AI GitHub repo (open-source execution framework at github.com/MacroTechTitan/MaximusAI) so users can browse and use skills + orchestration primitives free from within AI Connect. Aligns with the "workflow mandate" — every AI Connect action becomes composable into a workflow drawing from Maximus's orchestration.
+- Custom check runs / CI-style bot activity
+- Branch protection setup on new repos
+- Repo templates from AI Connect (parallel to Render templates)
+- Import existing repos into AI Connect
+- Team accounts / organization billing
+- Multi-role admin access (currently boolean is_admin; future: user_roles table)
+- Deeper accessibility work: screen reader announcements, ARIA on icon-only buttons, high contrast, reduced motion
+
+### Sprint 11 candidates locked from conversation
+
+- Maximus AI integration (skills catalog in AI Connect + workflow orchestration primitives)
+- Template scaffolding for Path A GitHub App flow
+- Bundle optimization (dynamic imports for /help and /admin)
+- Auto-redeploy Render after env sync (rolls forward Sprint 8 + Sprint 9 deferral)
+- Real bot behavior for GitHub webhook repo-activity events
+- Retroactive smoke test session covering Sprints 7-10
+
 ---
 
-*Last updated: 2026-06-24*
+*Last updated: 2026-07-19*
