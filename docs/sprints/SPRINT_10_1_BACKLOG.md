@@ -91,6 +91,7 @@ These are called out here for completeness but are large enough that they wouldn
 - **[DEFERRED] [FEATURE]** Team accounts / organization billing. Sprint 11+. Track E + I.
 - **[DEFERRED] [FEATURE]** Multi-role admin access (currently boolean is_admin; future: user_roles table). Sprint 11+. Track B.
 - **[DEFERRED] [POLISH]** Deeper accessibility work: screen reader announcements, ARIA on icon-only buttons, high contrast, reduced motion. Ongoing. Track I.
+- **[DEFERRED] [FEATURE]** Mobile auth broker for Life Hack Protocol — AI Connect endpoints for the LHP mobile app to authenticate WordPress/MemberPress users without the app ever talking to WordPress JWT plugins. Goal: `POST /api/mobile/lhp/login` accepts username+password, verifies against WordPress, fetches MemberPress membership via `mp/v1/`, issues AI Connect-signed JWT. `POST /api/mobile/lhp/validate` verifies token + re-checks MemberPress on TTL. New site-config entry for lifehackprotocol.com holding base URL + MemberPress API key (in existing vault, never sent to app). Rate limiting, generic error messages, short access token TTL with validate as refresh path. Investigation needed first: does `mp/v1/validate-login` accept username+password with pass/fail response, or fall back to WordPress core auth? Sprint 11+ scope. Own MOBILE_AUTH.md doc. Track I (cross-product) + G (WordPress connector adjacent).
 
 ### Other known standing items
 
