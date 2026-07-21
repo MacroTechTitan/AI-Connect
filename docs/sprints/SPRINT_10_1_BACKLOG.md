@@ -91,7 +91,46 @@ These are called out here for completeness but are large enough that they wouldn
 - **[DEFERRED] [FEATURE]** Team accounts / organization billing. Sprint 11+. Track E + I.
 - **[DEFERRED] [FEATURE]** Multi-role admin access (currently boolean is_admin; future: user_roles table). Sprint 11+. Track B.
 - **[DEFERRED] [POLISH]** Deeper accessibility work: screen reader announcements, ARIA on icon-only buttons, high contrast, reduced motion. Ongoing. Track I.
-- **[DEFERRED] [FEATURE]** Mobile auth broker for Life Hack Protocol — AI Connect endpoints for the LHP mobile app to authenticate WordPress/MemberPress users without the app ever talking to WordPress JWT plugins. Goal: `POST /api/mobile/lhp/login` accepts username+password, verifies against WordPress, fetches MemberPress membership via `mp/v1/`, issues AI Connect-signed JWT. `POST /api/mobile/lhp/validate` verifies token + re-checks MemberPress on TTL. New site-config entry for lifehackprotocol.com holding base URL + MemberPress API key (in existing vault, never sent to app). Rate limiting, generic error messages, short access token TTL with validate as refresh path. Investigation needed first: does `mp/v1/validate-login` accept username+password with pass/fail response, or fall back to WordPress core auth? Sprint 11+ scope. Own MOBILE_AUTH.md doc. Track I (cross-product) + G (WordPress connector adjacent).
+- **[DEFERRED] [FEATURE]** Mobile auth broker for Life Hack Protocol — full spec below. Sprint 11+ scope. Track I (cross-product) + G (WordPress connector adjacent).
+
+  **Goal:** the LHP mobile app authenticates users and checks their MemberPress membership WITHOUT the app ever talking to WordPress JWT plugins. AI Connect brokers via the MemberPress REST API.
+
+  **Context:**
+  - Target: lifehackprotocol.com, running MemberPress with Developer Tools REST API at `/wp-json/mp/v1/` (routes: members, memberships, subscriptions, me, validate-login).
+  - Auth to MemberPress: `MEMBERPRESS-API-KEY` header (server-to-server; key lives in AI Connect vault, NEVER sent to app).
+  - AI Connect already stores per-site config + has token-authed REST layer.
+
+  **Build:**
+
+  1. Site-config entry for lifehackprotocol.com holding: base URL + MemberPress API key. Reuse AI Connect's existing secret storage (vault_secret_id pattern) — do not hardcode.
+
+  2. `POST /api/mobile/lhp/login` (adjust to AI Connect route conventions):
+     - Body: `{ username, password }`
+     - INVESTIGATE FIRST: does `mp/v1/validate-login` accept username+password and return pass/fail? If yes → use it. If not → fall back to WordPress core auth endpoint (single server-side auth check), then look up member.
+     - On success: fetch MemberPress membership status (active memberships / tier) via `mp/v1` with API key.
+     - Issue AI-Connect-signed JWT (AI Connect secret) encoding: user_id, email, membership tiers, active boolean, expiry.
+     - Returns: `{ token, membership: { active, tiers }, user: { email, displayName } }`
+     - On failure: clean 401, generic message.
+
+  3. `POST /api/mobile/lhp/validate`:
+     - Body: AI Connect token
+     - Verifies signature + expiry
+     - Returns current `{ active, tiers }`, re-checking MemberPress if token is older than short TTL (e.g. 15 min) so revoked/expired memberships don't linger.
+
+  4. **Security:**
+     - Rate-limit login attempts
+     - Generic error messages (no user-enumeration)
+     - API key only from vault
+     - Tokens signed with AI Connect's secret
+     - Short access-token TTL with validate endpoint as refresh path
+
+  5. **Docs:** own `docs/MOBILE_AUTH.md` with request/response shapes so mobile app can integrate.
+
+  **Investigation required first (before finalizing):** MemberPress `mp/v1` capabilities, especially `validate-login`'s exact behavior. Report which password-verification path chosen and why before building.
+
+  **Deliverables after build:** exact endpoint URLs + curl example for login.
+
+  **Implementation notes:** TypeScript, follow existing AI Connect patterns (route structure, vault usage, JWT signing, validation middleware).
 
 ### Other known standing items
 
