@@ -52,6 +52,20 @@ function ai_connect_register_rest_routes()
             'permission_callback' => $auth,
         ),
     ));
+
+    // Mobile auth broker (see includes/mobile-auth.php). Same token gate: only
+    // AI Connect's server can verify a login or read a membership.
+    register_rest_route('ai-connect/v1', '/validate-login', array(
+        'methods' => 'POST',
+        'callback' => 'ai_connect_rest_validate_login',
+        'permission_callback' => $auth,
+    ));
+
+    register_rest_route('ai-connect/v1', '/membership-status', array(
+        'methods' => 'GET',
+        'callback' => 'ai_connect_rest_membership_status',
+        'permission_callback' => $auth,
+    ));
 }
 
 /**

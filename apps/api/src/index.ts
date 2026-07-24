@@ -16,6 +16,7 @@ import { registerPromptRoutes } from "./routes/prompt.js";
 import { registerStripeWebhookRoutes } from "./routes/stripeWebhook.js";
 import { registerSubscriptionRoutes } from "./routes/subscription.js";
 import { registerWordPressPluginRoutes } from "./routes/wordpressPlugin.js";
+import { registerMobileAuthRoutes } from "./routes/mobileAuth.js";
 
 const app = express();
 
@@ -119,6 +120,12 @@ registerSubscriptionRoutes(app);
 // reconciles installations lives at /api/github/webhook (registered above,
 // pre-JSON).
 registerGithubOAuthRoutes(app);
+
+// /api/mobile/lhp/* — PUBLIC (no Auth0). Brokers WordPress/MemberPress auth for
+// the Life Hack Protocol mobile app: verifies credentials via the ai-connect WP
+// plugin, reads MemberPress entitlements, issues an AI-Connect-signed token.
+// Rate-limited; secrets stay in Vault/env. See docs/MOBILE_AUTH.md.
+registerMobileAuthRoutes(app);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "not_found" });

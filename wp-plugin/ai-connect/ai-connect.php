@@ -3,14 +3,14 @@
  * Plugin Name: AI Connect
  * Plugin URI: https://aiconnect.macrotechtitan.com
  * Description: Embeds external apps as WordPress pages with optional MemberPress gating. Managed via AI Connect.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: Macro Tech Titan
  * License: MIT
  */
 
 defined('ABSPATH') || exit;
 
-define('AI_CONNECT_VERSION', '1.0.0');
+define('AI_CONNECT_VERSION', '1.1.0');
 define('AI_CONNECT_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AI_CONNECT_OPTION_TOKEN', 'ai_connect_token');
 define('AI_CONNECT_OPTION_MODULES', 'ai_connect_modules');
@@ -20,6 +20,7 @@ require_once AI_CONNECT_PLUGIN_DIR . 'includes/admin.php';
 require_once AI_CONNECT_PLUGIN_DIR . 'includes/rest-api.php';
 require_once AI_CONNECT_PLUGIN_DIR . 'includes/pages.php';
 require_once AI_CONNECT_PLUGIN_DIR . 'includes/memberpress.php';
+require_once AI_CONNECT_PLUGIN_DIR . 'includes/mobile-auth.php';
 
 // Activation: ensure a default empty modules array, then flush rewrite rules so
 // any future module pages can register cleanly.

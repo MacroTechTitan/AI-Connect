@@ -59,6 +59,24 @@ const envSchema = z.object({
   // Admin seed — written by lib/seed.ts on boot.
   ADMIN_EMAIL: z.string().email().default("jgelet@macrotechtitan.com"),
 
+  // Mobile auth broker (routes/mobileAuth.ts, docs/MOBILE_AUTH.md). Lets the
+  // Life Hack Protocol mobile app authenticate WordPress/MemberPress users via
+  // AI Connect, without the app ever touching WordPress. All optional so /health
+  // and local mode boot without them; the login route fails with a clean 500 if
+  // MOBILE_JWT_SIGNING_KEY or the site config is missing when first called.
+  //
+  // - MOBILE_JWT_SIGNING_KEY: HMAC secret for signing/verifying the tokens this
+  //   broker issues to the app. A dedicated high-entropy secret — NOT reused
+  //   from MASTER_KEY (vault AES key) or any other purpose. openssl rand -hex 32.
+  // - LHP_SITE_URL: base URL of the target WordPress site.
+  // - LHP_WP_TOKEN_SECRET_ID: Supabase Vault secret id (uuid) holding the
+  //   ai-connect WordPress plugin token (X-AI-Connect-Token). The token value
+  //   itself lives ONLY in Vault; this env var is just the pointer to it, mirroring
+  //   how the integrations table stores vault_secret_id rather than the secret.
+  MOBILE_JWT_SIGNING_KEY: z.string().min(32).optional(),
+  LHP_SITE_URL: z.string().url().default("https://lifehackprotocol.com"),
+  LHP_WP_TOKEN_SECRET_ID: z.string().uuid().optional(),
+
   // Sprint 7 — local vs cloud mode detection (lib/mode.ts). Either var flips
   // AI Connect into "local mode", enabling local-only integrations like
   // OpenClaw (which spawns maximus-bridge as a child process). Both unset =
