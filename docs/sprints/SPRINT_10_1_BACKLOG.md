@@ -44,6 +44,32 @@ Track:
 
   Fix scope for Sprint 10.1: signed-in users at `/` should be redirected to (or show inline) a workspace home. Real solution likely: introduce `/app` or `/dashboard` route that renders the workspace surface (Integrations + Projects), auto-redirect signed-in users from `/` to `/app`, keep `/` as marketing for signed-out.
 
+- **[BUG] P0** [Track E — Stripe] `GET /api/subscription` returns error to signed-in user. UI shows red text "Couldn't load your subscription. Try again." for jgelet@macrotechtitan.com (admin, previously granted `tier=pro` via Sprint 9 grandfathering + Sprint 10 admin actions).
+
+  Investigation needed:
+  - Does the subscriptions row exist for user_id 875536fd-837c-4d2e-aa43-b1ed5a24100a in prod DB? (Sprint 9 bootstrapSubscriptions.ts may never have run in prod.)
+  - If row exists, is `GET /api/subscription` failing at the API layer? Check Render logs for 500 or timeout.
+  - Is the Auth0 bearer token being sent correctly by the client (SubscriptionPanel.tsx)?
+
+  Impact: users can't see their tier, can't manage billing, can't tell if they're Free or Pro. Directly blocks paid user retention because someone with an active subscription would think it broke.
+
+  Fix scope: run bootstrapSubscriptions.ts on prod (grandfather all existing users to Pro with `tier=pro, status=active, stripe_subscription_id=null`) as documented in Sprint 9 deploy tasks. If that doesn't fix it, debug the endpoint itself.
+
+- **[POLISH] P1** [Track I / Track E] Pricing cards visible to signed-in users. When a signed-in user views Settings, they see the Free vs Pro side-by-side pricing table as if they were a prospect. Should be conditional on subscription state: signed-in Pro users see "Your subscription: Pro • Next renewal on X" without pricing tiles; Free users see the pricing tiles inline. Signed-out visitors on the marketing landing page see pricing separately.
+
+  Impact: confusing UX. Admin/pro users see "Upgrade to Pro" button as if they weren't. Compounds with the P0 above — because subscription didn't load, the pricing table becomes the visual anchor of the page and everyone looks like an unpurchased prospect.
+
+  Fix scope: SubscriptionPanel.tsx should render differently based on tier state. Pricing tiles hidden for active Pro users. "Manage subscription" primary action for Pro users. Only show pricing/upgrade UI when tier === 'free'.
+
+- **[POLISH] P2** [Track I] Signed-in user info visually buried. The "Signed in as jgelet@macrotechtitan.com (role: admin) · MacroTechTitan · Hide settings · Help · Admin · Sign out" card sits between the marketing hero and Settings content. It's low-density and easy to miss.
+
+  Impact: user identity + navigation feel like an afterthought. Feels like they were bolted on rather than designed for.
+
+  Fix scope: after landing page bug (P0) is fixed and signed-in users get an app surface at `/app` or `/dashboard`, this card can become a proper header/nav bar with:
+  - User avatar + email on the right
+  - Nav links (Projects, Integrations, Settings, Admin, Help) as top nav
+  - Sign out in a dropdown menu
+
 ## Standing carry-forward items from Sprint 6-10 deferrals
 
 ### Sprint 10.5+ small polish
