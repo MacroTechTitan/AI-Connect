@@ -30,9 +30,19 @@ Track:
 - **H** — Project Genesis (all sprints)
 - **I** — Cross-cutting / platform (auth, design system, main.tsx routing, etc.)
 
-## Backlog (empty — populate during smoke test)
+## Backlog
 
-_Nothing yet._
+### 2026-07-19 — Smoke test findings
+
+- **[BUG] P0** [Track I / cross-cutting] Signed-in users see the pre-launch marketing landing page instead of a real workspace / dashboard. When jgelet@macrotechtitan.com signs in at aiconnect.macrotechtitan.com, the screen shown is the same static "AI Connect — The methodology layer for AI-assisted development" landing page a signed-out visitor sees, with only a small "Signed in as..." card added at the bottom. There is no visible entry point to the actual product surface (Integrations panel, Projects panel, Settings, Genesis, admin dashboard). Links exist ("Manage settings", "Help", "Admin", "Sign out") but they're buried at the bottom of the marketing page.
+
+  Expected: signed-in users land on a real app surface — Projects list, Integrations, or a workspace home — where they can see what they have and what they can do. The landing page should be for signed-OUT visitors only.
+
+  Impact: no user can figure out what AI Connect actually does or how to use it after signing in. Blocks user acquisition entirely — first-run experience is "I signed up... now what?"
+
+  Root cause hypothesis: main.tsx likely doesn't split rendering between authenticated + unauthenticated states in a meaningful way. The landing page renders regardless. The `/ui` and `/admin` and `/help` gates work for their specific paths but the root `/` has no signed-in variant.
+
+  Fix scope for Sprint 10.1: signed-in users at `/` should be redirected to (or show inline) a workspace home. Real solution likely: introduce `/app` or `/dashboard` route that renders the workspace surface (Integrations + Projects), auto-redirect signed-in users from `/` to `/app`, keep `/` as marketing for signed-out.
 
 ## Standing carry-forward items from Sprint 6-10 deferrals
 
