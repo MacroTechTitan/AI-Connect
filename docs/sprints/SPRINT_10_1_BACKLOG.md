@@ -70,6 +70,12 @@ Track:
   - Nav links (Projects, Integrations, Settings, Admin, Help) as top nav
   - Sign out in a dropdown menu
 
+- **[BUG] P0** [Track I / cross-cutting] `/settings`, `/projects`, `/integrations`, and other logical routes return Vercel 404 page. The Settings panel exists but is rendered inline on the root `/` page — there's no client-side routing. When a user types `/settings` in the URL bar or clicks a link expecting `/settings`, they get Vercel's error page instead. This confirms the P0 landing page bug: there's no real routed app surface.
+
+  Impact: any URL a user tries to type or bookmark inside the app fails. Deep links can't work. Would need to redesign navigation such that either (a) there's real client-side routing (React Router or wouter or similar) OR (b) all URLs redirect to `/` and app state is URL-hash-based.
+
+  Fix scope: introduce client-side routing to the web app. Real routes: `/` (marketing landing for signed-out; workspace home for signed-in), `/projects`, `/integrations`, `/settings`, `/billing`, `/admin` (already gated separately), `/help` (already gated separately). This overlaps with the P0 landing page fix.
+
 ## Standing carry-forward items from Sprint 6-10 deferrals
 
 ### Sprint 10.5+ small polish
