@@ -3,5 +3,8 @@
   "buildCommand": "cd ../.. && pnpm install --filter @ai-connect/web... --frozen-lockfile && pnpm --filter @ai-connect/shared build && pnpm --filter @ai-connect/web build",
   "outputDirectory": "dist",
   "framework": "vite",
-  "installCommand": "echo install handled by buildCommand"
+  "installCommand": "echo install handled by buildCommand",
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
 }
