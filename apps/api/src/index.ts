@@ -5,6 +5,7 @@ import { logger } from "./lib/logger.js";
 import { isLocalMode } from "./lib/mode.js";
 import { seedAdmin } from "./lib/seed.js";
 import { registerAdminRoutes } from "./routes/admin.js";
+import { registerBuildRunRoutes } from "./routes/buildRuns.js";
 import { registerIntegrationsRoutes } from "./routes/integrations.js";
 import { registerKeysRoutes } from "./routes/keys.js";
 import { registerMeRoutes } from "./routes/me.js";
@@ -119,6 +120,11 @@ registerSubscriptionRoutes(app);
 // reconciles installations lives at /api/github/webhook (registered above,
 // pre-JSON).
 registerGithubOAuthRoutes(app);
+
+// /api/build-runs/* — Auth0 JWT-gated DevOS Agentic Build Control (Issue #19).
+// Supervision only: run lifecycle, normalized event timeline, independent
+// review verdicts and the human approval gate. No worker is dispatched here.
+registerBuildRunRoutes(app);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "not_found" });
