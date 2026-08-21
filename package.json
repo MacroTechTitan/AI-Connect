@@ -13,7 +13,8 @@
     "typecheck": "pnpm -r typecheck",
     "dev": "pnpm -r --parallel dev",
     "db:generate": "pnpm --filter @ai-connect/api db:generate",
-    "db:studio": "pnpm --filter @ai-connect/api db:studio"
+    "db:studio": "pnpm --filter @ai-connect/api db:studio",
+    "test": "pnpm -r --if-present test"
   },
   "devDependencies": {
     "typescript": "5.5.4"
