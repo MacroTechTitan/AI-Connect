@@ -1,3 +1,5 @@
+import type { Server as HttpServer } from "node:http";
+
 import cors from "cors";
 import express from "express";
 import { env } from "./lib/env.js";
@@ -5,6 +7,7 @@ import { logger } from "./lib/logger.js";
 import { isLocalMode } from "./lib/mode.js";
 import { seedAdmin } from "./lib/seed.js";
 import { registerAdminRoutes } from "./routes/admin.js";
+import { registerBuildRunRoutes } from "./routes/buildRuns.js";
 import { registerIntegrationsRoutes } from "./routes/integrations.js";
 import { registerKeysRoutes } from "./routes/keys.js";
 import { registerMeRoutes } from "./routes/me.js";
@@ -120,6 +123,11 @@ registerSubscriptionRoutes(app);
 // pre-JSON).
 registerGithubOAuthRoutes(app);
 
+// /api/build-runs/* — Auth0 JWT-gated DevOS Agentic Build Control (Issue #19).
+// Supervision only: run lifecycle, normalized event timeline, independent
+// review verdicts and the human approval gate. No worker is dispatched here.
+registerBuildRunRoutes(app);
+
 app.use((_req, res) => {
   res.status(404).json({ error: "not_found" });
 });
@@ -137,6 +145,10 @@ try {
 const port = env.PORT;
 const host = "0.0.0.0"; // MTTBuild Phase 0: bind explicitly, never default.
 
-app.listen(port, host, () => {
+// Exported so local harnesses (scripts/localApiHarness.ts) can boot the real
+// server and shut it down again. Production never touches this export.
+// The type annotation is required: without it declaration emit tries to name
+// express's inferred app type and fails TS2742.
+export const server: HttpServer = app.listen(port, host, () => {
   logger.info({ port, host, nodeEnv: env.NODE_ENV }, "ai-connect-api listening");
 });

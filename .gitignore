@@ -52,3 +52,10 @@ tmp/
 apps/api/drizzle/.snapshot.json.bak
 apps/api/.drizzle-cache/
 .env*
+
+# ...but the documented template of variable NAMES is committed.
+!.env.example
+!**/.env.example
+
+# Build Control runner raw transcripts, if ever pointed at the repo
+.aiconnect-runs/

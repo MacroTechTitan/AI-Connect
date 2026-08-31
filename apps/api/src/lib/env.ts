@@ -65,6 +65,60 @@ const envSchema = z.object({
   // cloud mode (the Render default), which refuses local-only operations.
   AICONNECT_LOCAL_MODE: z.string().optional(),
   OPENCLAW_BIN: z.string().optional(),
+
+  // DevOS Agentic Build Control runner (lib/buildControl/worker/). Dispatching
+  // a build run spawns a Claude Code process on the host, so the runner is OFF
+  // unless BOTH of the first two are set: an API instance that is not meant to
+  // execute anything must never be one flag away from doing so. On Render both
+  // are unset and `start` behaves exactly as it did before the runner existed.
+  AICONNECT_RUNNER_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === "1" || v?.toLowerCase() === "true"),
+  // The ONLY directory tree a worker may be dispatched into. Every workspace
+  // is resolved through realpath and must land inside it — see
+  // lib/buildControl/worker/workspace.ts.
+  AICONNECT_RUNNER_WORKSPACE_ROOT: z.string().optional(),
+  // Claude Code executable. Overridable so a pinned or wrapped binary can be
+  // used without changing code.
+  CLAUDE_CODE_BIN: z.string().optional(),
+  // Where raw worker transcripts are written. Kept OUT of the repository the
+  // worker is editing, so a transcript never lands in the run's own diff.
+  AICONNECT_RUNNER_LOG_DIR: z.string().optional(),
+  // Hard ceiling on one dispatch. A worker that blows through it is terminated
+  // and the run FAILS — supervision means no unbounded process.
+  AICONNECT_RUNNER_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(30 * 60 * 1000),
+  // Optional model override passed to the worker.
+  AICONNECT_RUNNER_MODEL: z.string().optional(),
+  // Optional JSON allow-list of selectable workspaces, key -> path (relative
+  // to the root) or key -> {path, projects, description}. When set it is an
+  // ALLOW-LIST: only these keys are selectable, so dropping a repository under
+  // the root does not silently make it dispatchable. When unset, any git
+  // repository directly beneath the root is selectable by directory name.
+  // See lib/buildControl/worker/workspaceRegistry.ts.
+  AICONNECT_RUNNER_WORKSPACES: z.string().optional(),
+
+  // Independent reviewer (lib/buildControl/reviewer/). Separate from the
+  // worker on purpose: the thing that did the work must never be the thing
+  // that judges it. Provider-neutral — this names which adapter to use.
+  AICONNECT_REVIEWER_PROVIDER: z.string().optional(),
+  AICONNECT_REVIEWER_MODEL: z.string().optional(),
+  // Hard ceiling on one review. A reviewer that blows through it fails the
+  // review; it never silently leaves a run sitting in REVIEWING.
+  AICONNECT_REVIEWER_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10 * 60 * 1000),
+  // Comma-separated workspace-relative files whose contents are included in
+  // the review payload as architecture/policy context (e.g.
+  // "CLAUDE.md,docs/MTTBuild.md"). Read-only, size-capped, and redacted like
+  // everything else in the payload.
+  AICONNECT_REVIEWER_CONTEXT_FILES: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);
