@@ -126,6 +126,7 @@ let api: LocalApi;
 let pool: pg.Pool;
 let workspaceRoot: string;
 let repoRoot: string;
+let workspaceKey: string;
 
 const stamp = randomUUID().slice(0, 8);
 const OWNER = `runner-${stamp}@staging.local`;
@@ -181,22 +182,21 @@ async function createRun(title: string, over: Record<string, unknown> = {}): Pro
     title,
     goal: "runner integration fixture",
     acceptance_criteria: ["it works"],
+    // The supported way to choose a repository: a KEY, resolved against the
+    // configured root at create time. The fixture repo is a direct child of
+    // the root, so its directory name is its key. A caller can never name a
+    // path — the create route does not accept one.
+    workspace: workspaceKey,
     ...over,
   });
   expect(res.status, JSON.stringify(res.body)).toBe(201);
-  // The workspace is not yet modelled on projects, so the runner reads it from
-  // the run. Set it directly — the create route does not accept a path, by
-  // design: a caller must never be able to choose where execution happens.
-  await pool.query(`UPDATE build_runs SET worktree_path = $1 WHERE id = $2`, [
-    repoRoot,
-    res.body.id,
-  ]);
   return res.body.id;
 }
 
 beforeAll(async () => {
   workspaceRoot = process.env.AICONNECT_RUNNER_WORKSPACE_ROOT!;
-  repoRoot = resolve(workspaceRoot, `repo-${stamp}`);
+  workspaceKey = `repo-${stamp}`;
+  repoRoot = resolve(workspaceRoot, workspaceKey);
   mkdirSync(repoRoot, { recursive: true });
   execFileSync("git", ["-C", repoRoot, "init", "-q"], { windowsHide: true });
   execFileSync("git", ["-C", repoRoot, "config", "user.email", "t@example.com"]);
@@ -488,6 +488,9 @@ describe("failure is the runner's own path, and is never STOPPED", () => {
 
   it("fails the run when the workspace is outside the authorized root", async () => {
     const runId = await createRun("escape attempt");
+    // Tamper with the stored path directly, simulating a row edited outside
+    // the API. Dispatch re-validates containment rather than trusting a path
+    // just because it is persisted, so this must still be refused.
     await pool.query(`UPDATE build_runs SET worktree_path = $1 WHERE id = $2`, [
       resolve(workspaceRoot, "..", "somewhere-else"),
       runId,

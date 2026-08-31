@@ -323,9 +323,22 @@ async function dispatchOnce(
     const branch = run.branchName ?? branchNameForRun(run.id, run.title);
     let workspace;
     try {
+      if (!run.worktreePath) {
+        // No fallback to the workspace root. The root is a directory of
+        // repositories, not a repository, and quietly dispatching into it
+        // would let a run without a chosen workspace execute somewhere nobody
+        // picked. A run gets a workspace at create time or it does not run.
+        throw new WorkspaceViolationError(
+          "this run has no workspace — create it with a `workspace` key " +
+            "(see GET /api/build-runs/workspaces)",
+        );
+      }
       workspace = resolveWorkspace({
         allowedRoot: env.AICONNECT_RUNNER_WORKSPACE_ROOT,
-        repoPath: run.worktreePath ?? env.AICONNECT_RUNNER_WORKSPACE_ROOT ?? "",
+        // Re-resolved on every dispatch rather than trusted because it is
+        // stored: a path that was inside the root at create time must still be
+        // inside it now.
+        repoPath: run.worktreePath,
         branch,
       });
       await ensureBranch(workspace.repoRoot, workspace.branch);
@@ -791,6 +804,21 @@ async function failRun(
 // ---------------------------------------------------------------------------
 // Test seam
 // ---------------------------------------------------------------------------
+
+/**
+ * Queues an instruction for a run's next dispatch WITHOUT dispatching.
+ *
+ * Used by the independent reviewer: a REVISION_REQUIRED verdict must send its
+ * findings back to the worker, but it must not restart the worker on its own.
+ * Moving a run out of REVISION_REQUIRED is an operator decision — supervision
+ * means a human chooses to continue. The findings ride the next dispatch the
+ * operator triggers.
+ */
+export function queueInstruction(runId: string, instruction: string): number {
+  const entry = liveFor(runId);
+  entry.queued.push(instruction);
+  return entry.queued.length;
+}
 
 /** Clears per-process run state. Tests only. */
 export function resetRunnerState(): void {
