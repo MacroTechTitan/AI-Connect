@@ -56,14 +56,24 @@ pnpm install                                    # bootstrap (uses pnpm@9.12.0 vi
 pnpm -r build                                   # build every workspace (shared → apps)
 pnpm -r typecheck                               # tsc --noEmit across all workspaces
 pnpm -r --parallel dev                          # all dev servers (api: tsx watch, web: vite)
-pnpm --filter @ai-connect/api dev               # API only (tsx watch src/index.ts)
+pnpm --filter @ai-connect/api dev               # API only (tsx watch src/devServer.ts)
 pnpm --filter @ai-connect/web dev               # Web only (Vite on :5173)
 pnpm --filter @ai-connect/shared build          # rebuild shared after editing it
 pnpm db:generate                                # drizzle-kit generate (in apps/api)
 pnpm db:studio                                  # drizzle-kit studio
+
+pnpm test                                       # vitest unit tests (no DB, no network)
+pnpm staging:db:up                              # local staging Postgres (docker)
+pnpm db:migrate                                 # apply migrations to a NON-production DB
+pnpm test:integration                           # route + DB tests against the staging DB
 ```
 
-There is no test runner wired yet — adding one is a future sprint deliverable.
+**Testing and the staging database.** `pnpm test` is hermetic — pure unit tests,
+no database. Anything that needs Postgres runs against the disposable local
+staging database, never production: see `docs/STAGING_DATABASE.md` for setup,
+the `.env` loading rules, and the guard that makes `pnpm db:migrate` refuse any
+host it cannot prove is local. Production migrations remain a manual, reviewed
+operation through the Supabase SQL editor.
 
 After editing `packages/shared`, rebuild it so consuming apps see the new `dist/`. The deployment build commands (in `render.yaml` and `apps/web/vercel.json`) always do `pnpm --filter @ai-connect/shared build` before the app build, and local dev should follow the same order.
 

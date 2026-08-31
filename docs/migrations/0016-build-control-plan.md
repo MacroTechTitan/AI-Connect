@@ -2,11 +2,14 @@
 
 **Migration:** `apps/api/drizzle/0016_same_lady_bullseye.sql`
 **Issue:** #19 · **PR:** #20 · **Branch:** `agent/devos-build-control`
-**Status:** Generated and committed. **NOT applied to any database.**
+**Status:** Applied and verified on the staging database (2026-08-31).
+**NOT applied to production.**
 
-Per MTTBuild ("When schema changes are needed"), this migration is committed
-but not applied. The operator applies it with eyes on the output, runs the
-verification queries below, and only then is the code that uses it merged.
+Per MTTBuild ("When schema changes are needed"), this migration is generated,
+committed and reviewed before it is applied anywhere. It has now been applied
+to the staging database with eyes on the output and every verification query
+below run against it. Production is still untouched, and stays that way until
+the code that uses the new tables is merged.
 
 ## What it does
 
@@ -45,13 +48,27 @@ which is acceptable while the feature has no users.
 
 ## Apply
 
+### Staging — done
+
 ```bash
 # review first
 cat apps/api/drizzle/0016_same_lady_bullseye.sql
 
-# then apply via the SQL editor, or:
-pnpm --filter @ai-connect/api exec drizzle-kit migrate
+pnpm staging:db:up     # docker-compose.staging.yml
+pnpm db:migrate        # guarded runner — refuses any non-local host
 ```
+
+Applied 2026-08-31 to `ai_connect_staging` on `127.0.0.1:55432`, a container
+created empty minutes earlier. Because the database was fresh, this applied
+0000–0016 in one pass — 17 migrations, 20 tables, 0 errors — recorded in
+`drizzle.__drizzle_migrations`. See `docs/STAGING_DATABASE.md`.
+
+### Production — not done
+
+Production is unchanged, and `pnpm db:migrate` cannot reach it (the guard
+refuses any host it cannot prove is local). Applying 0016 to production remains
+a manual, reviewed operation through the Supabase SQL editor, and is not part
+of this work.
 
 ## Verification queries
 
@@ -130,10 +147,28 @@ After rolling back the schema, also revert the application code — the API
 registers `/api/build-runs/*` at boot and those routes will fail once the
 tables are gone.
 
+## Staging verification results (2026-08-31)
+
+All five verification queries returned exactly what this document predicted:
+
+| Query | Result |
+| --- | --- |
+| 1. Four tables exist | 4 rows: `build_approvals`, `build_events`, `build_reviews`, `build_runs` |
+| 2. Column types | `additions` integer, `deletions` integer, `cost_usd` numeric(10,6) |
+| 3. State CHECK | All ten states present, in order |
+| 4. One-active index | Partial, `WHERE state IN` the six active states — terminals excluded |
+| 5. Foreign keys | 13 rows, matching the predicted count |
+
+The behavioural check behaved as designed: the second active `INSERT` on one
+project failed with `23505` on
+`build_runs_one_active_per_project_idx`, and moving the first run to `STOPPED`
+freed the slot so the retry succeeded. Fixture rows were removed afterwards.
+
 ## Follow-up
 
-`drizzle-kit migrate` has never been run in this repository; migrations 0000–
-0015 were applied by other means. Whether 0016 is applied through the CLI or
-the SQL editor is the operator's call, but the `drizzle/meta/_journal.json`
-entry now exists either way and should be kept consistent with what is
-actually applied.
+Migrations 0000–0015 were applied to production by other means, before any
+migration runner existed in this repository. `pnpm db:migrate` (added with this
+work) is the runner for **non-production** databases only; production's
+`drizzle.__drizzle_migrations` table does not exist, so the runner would try to
+replay 0000 onward there. Keep `drizzle/meta/_journal.json` consistent with
+what is actually applied in each environment.

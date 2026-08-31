@@ -1,0 +1,45 @@
+# AI Connect — local staging/dev database.
+#
+# This is the NON-PRODUCTION database path for AI Connect. It exists so schema
+# migrations and route work (Build Control, Project Genesis, …) can be applied
+# and exercised against a real Postgres without ever pointing a developer's
+# machine at the production Supabase project.
+#
+# It is deliberately disposable: `docker compose -f docker-compose.staging.yml
+# down -v` destroys it, and `pnpm db:migrate:staging` rebuilds the schema from
+# apps/api/drizzle/ in seconds.
+#
+# Bound to 127.0.0.1 only. The password below is a throwaway local credential,
+# not a secret — it grants access to a container on this machine that holds no
+# real data. Override it with AICONNECT_STAGING_DB_PASSWORD if you prefer.
+#
+#   Start:    docker compose -f docker-compose.staging.yml up -d
+#   Stop:     docker compose -f docker-compose.staging.yml stop
+#   Destroy:  docker compose -f docker-compose.staging.yml down -v
+#
+# See docs/STAGING_DATABASE.md.
+
+services:
+  staging-db:
+    image: postgres:16-alpine
+    container_name: ai-connect-staging-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aiconnect
+      POSTGRES_PASSWORD: ${AICONNECT_STAGING_DB_PASSWORD:-aiconnect_local_dev}
+      POSTGRES_DB: ai_connect_staging
+    ports:
+      # Host port 55432 deliberately avoids 5432 so this can never be confused
+      # with — or shadow — another local Postgres.
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - ai-connect-staging-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiconnect -d ai_connect_staging"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ai-connect-staging-db-data:
+    name: ai-connect-staging-db-data
