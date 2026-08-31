@@ -526,7 +526,7 @@ export function rawLogPathFor(runId: string, sessionId: string): string {
  * passthrough: a supervised worker has no business inheriting the API's
  * database URL, master key, diagnostics token or platform credentials.
  */
-function workerEnv(): NodeJS.ProcessEnv {
+export function workerEnv(): NodeJS.ProcessEnv {
   const blocked = [
     /^DATABASE_URL$/,
     /^MASTER_KEY$/,

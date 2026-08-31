@@ -94,6 +94,31 @@ const envSchema = z.object({
     .default(30 * 60 * 1000),
   // Optional model override passed to the worker.
   AICONNECT_RUNNER_MODEL: z.string().optional(),
+  // Optional JSON allow-list of selectable workspaces, key -> path (relative
+  // to the root) or key -> {path, projects, description}. When set it is an
+  // ALLOW-LIST: only these keys are selectable, so dropping a repository under
+  // the root does not silently make it dispatchable. When unset, any git
+  // repository directly beneath the root is selectable by directory name.
+  // See lib/buildControl/worker/workspaceRegistry.ts.
+  AICONNECT_RUNNER_WORKSPACES: z.string().optional(),
+
+  // Independent reviewer (lib/buildControl/reviewer/). Separate from the
+  // worker on purpose: the thing that did the work must never be the thing
+  // that judges it. Provider-neutral — this names which adapter to use.
+  AICONNECT_REVIEWER_PROVIDER: z.string().optional(),
+  AICONNECT_REVIEWER_MODEL: z.string().optional(),
+  // Hard ceiling on one review. A reviewer that blows through it fails the
+  // review; it never silently leaves a run sitting in REVIEWING.
+  AICONNECT_REVIEWER_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10 * 60 * 1000),
+  // Comma-separated workspace-relative files whose contents are included in
+  // the review payload as architecture/policy context (e.g.
+  // "CLAUDE.md,docs/MTTBuild.md"). Read-only, size-capped, and redacted like
+  // everything else in the payload.
+  AICONNECT_REVIEWER_CONTEXT_FILES: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);
