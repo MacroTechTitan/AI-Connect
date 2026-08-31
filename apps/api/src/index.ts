@@ -1,3 +1,5 @@
+import type { Server as HttpServer } from "node:http";
+
 import cors from "cors";
 import express from "express";
 import { env } from "./lib/env.js";
@@ -143,6 +145,10 @@ try {
 const port = env.PORT;
 const host = "0.0.0.0"; // MTTBuild Phase 0: bind explicitly, never default.
 
-app.listen(port, host, () => {
+// Exported so local harnesses (scripts/localApiHarness.ts) can boot the real
+// server and shut it down again. Production never touches this export.
+// The type annotation is required: without it declaration emit tries to name
+// express's inferred app type and fails TS2742.
+export const server: HttpServer = app.listen(port, host, () => {
   logger.info({ port, host, nodeEnv: env.NODE_ENV }, "ai-connect-api listening");
 });

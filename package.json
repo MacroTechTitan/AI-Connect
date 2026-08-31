@@ -18,7 +18,8 @@
     "staging:db:up": "docker compose -f docker-compose.staging.yml up -d",
     "staging:db:down": "docker compose -f docker-compose.staging.yml down",
     "staging:db:destroy": "docker compose -f docker-compose.staging.yml down -v",
-    "test": "pnpm -r --if-present test"
+    "test": "pnpm -r --if-present test",
+    "test:integration": "pnpm --filter @ai-connect/api test:integration"
   },
   "devDependencies": {
     "typescript": "5.5.4"
