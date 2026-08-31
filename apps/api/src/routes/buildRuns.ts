@@ -22,6 +22,7 @@ import {
   projects,
 } from "../db/schema.js";
 import { logSystem, logUserAction } from "../lib/logging.js";
+import { isUniqueViolation } from "../lib/pgErrors.js";
 import {
   assertOrgAccess,
   orgScopeFilter,
@@ -42,10 +43,12 @@ import { requireAuth, requireHydratedUser } from "../middleware/requireAuth.js";
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Postgres unique_violation. The one-active-run-per-project partial index is
-// the authority on concurrency, so we surface its rejection as a 409 rather
-// than racing a SELECT-then-INSERT check that two requests could both pass.
-const PG_UNIQUE_VIOLATION = "23505";
+// The one-active-run-per-project partial index is the authority on
+// concurrency, so we surface its rejection as a 409 rather than racing a
+// SELECT-then-INSERT check that two requests could both pass. Naming the index
+// explicitly keeps an unrelated collision inside the same transaction from
+// being reported as "you already have an active run".
+const ONE_ACTIVE_RUN_INDEX = "build_runs_one_active_per_project_idx";
 
 const MAX_TITLE = 200;
 const MAX_TEXT = 5000;
@@ -268,14 +271,6 @@ function readRunId(req: Request, res: Response): string | null {
   return id;
 }
 
-function isUniqueViolation(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    (err as { code?: unknown }).code === PG_UNIQUE_VIOLATION
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Create
 // ---------------------------------------------------------------------------
@@ -345,7 +340,7 @@ async function handleCreateRun(req: Request, res: Response): Promise<void> {
       return run as unknown as Record<string, unknown>;
     });
   } catch (err) {
-    if (isUniqueViolation(err)) {
+    if (isUniqueViolation(err, ONE_ACTIVE_RUN_INDEX)) {
       res.status(409).json({
         error: "active_run_exists",
         reason: "this project already has an active supervised build run",
@@ -711,8 +706,17 @@ const handleReview: RequestHandler = asyncRoute(async (req, res) => {
   );
 });
 
+// Event types are a consumer-facing vocabulary, so they are spelled out rather
+// than derived from the action name — `run.${action}d` quietly produced
+// "run.rejectd" and nothing filtering on "run.rejected" would ever have matched.
+const DECISION_EVENT_TYPE = {
+  approve: "run.approved",
+  reject: "run.rejected",
+} as const;
+
 function decisionAction(action: "approve" | "reject"): RequestHandler {
   const decision = action === "approve" ? "APPROVE" : "REJECT";
+  const eventType = DECISION_EVENT_TYPE[action];
   return asyncRoute(async (req, res) => {
     const parsed = noteSchema.safeParse(req.body ?? {});
 
@@ -727,7 +731,7 @@ function decisionAction(action: "approve" | "reject"): RequestHandler {
         // releasable. The recorded release_status is deliberately untouched.
         return {
           outcome: {
-            eventType: `run.${action}d`,
+            eventType,
             summary: `Human ${decision} recorded`,
             details: {
               decision,
