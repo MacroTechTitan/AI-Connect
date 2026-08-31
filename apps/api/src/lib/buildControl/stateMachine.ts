@@ -72,6 +72,30 @@ export const BUILD_RUN_ACTIONS = [
 
 export type BuildRunAction = (typeof BUILD_RUN_ACTIONS)[number];
 
+// Actions the WORKER owns, not the operator. They are deliberately a separate
+// vocabulary from BUILD_RUN_ACTIONS: `allowedActions` describes the buttons an
+// operator may press, and neither of these is one. No route exposes them — the
+// runner calls nextState() with them directly.
+//
+//   complete  the worker finished its work and the run goes for review
+//   fail      the worker could not finish — a genuine execution fault
+//
+// `fail` is why FAILED exists and is why STOPPED is not reused for it: STOPPED
+// records a deliberate human decision, FAILED records an execution fault, and
+// collapsing the two produces exactly the unattributable history Build Control
+// exists to prevent.
+export const BUILD_RUN_WORKER_ACTIONS = ["complete", "fail"] as const;
+
+export type BuildRunWorkerAction = (typeof BUILD_RUN_WORKER_ACTIONS)[number];
+
+export type AnyBuildRunAction = BuildRunAction | BuildRunWorkerAction;
+
+export function isWorkerAction(
+  action: AnyBuildRunAction,
+): action is BuildRunWorkerAction {
+  return (BUILD_RUN_WORKER_ACTIONS as readonly string[]).includes(action);
+}
+
 export const REVIEW_VERDICTS = ["PASS", "REVISION_REQUIRED", "STOP"] as const;
 export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number];
 
@@ -80,9 +104,16 @@ export type ReleaseStatus = (typeof RELEASE_STATUSES)[number];
 
 // Actions whose target state does not depend on a payload.
 const SIMPLE_TRANSITIONS: Record<
-  Exclude<BuildRunAction, "review" | "instruct">,
+  Exclude<AnyBuildRunAction, "review" | "instruct">,
   { from: readonly BuildRunState[]; to: BuildRunState }
 > = {
+  // Worker-owned. `complete` is only legal from RUNNING: a paused or already
+  // reviewed run is not something a worker may declare finished.
+  complete: { from: ["RUNNING"], to: "REVIEWING" },
+  // A genuine execution fault can arrive whenever a worker is live or was
+  // about to be. Not from REVIEWING or AWAITING_APPROVAL — by then the worker
+  // is done and any fault belongs to review, not to execution.
+  fail: { from: ["QUEUED", "RUNNING", "PAUSED", "REVISION_REQUIRED"], to: "FAILED" },
   start: { from: ["QUEUED"], to: "RUNNING" },
   pause: { from: ["RUNNING"], to: "PAUSED" },
   resume: { from: ["PAUSED"], to: "RUNNING" },
@@ -116,14 +147,14 @@ const VERDICT_TO_STATE: Record<ReviewVerdict, BuildRunState> = {
 
 export interface TransitionInput {
   state: BuildRunState;
-  action: BuildRunAction;
+  action: AnyBuildRunAction;
   verdict?: ReviewVerdict;
 }
 
 export type TransitionResult =
   | { ok: true; nextState: BuildRunState; passedThrough?: BuildRunState }
-  | { ok: false; reason: "invalid_transition"; from: BuildRunState; action: BuildRunAction; allowedFrom: readonly BuildRunState[] }
-  | { ok: false; reason: "verdict_required"; from: BuildRunState; action: BuildRunAction; allowedFrom: readonly BuildRunState[] };
+  | { ok: false; reason: "invalid_transition"; from: BuildRunState; action: AnyBuildRunAction; allowedFrom: readonly BuildRunState[] }
+  | { ok: false; reason: "verdict_required"; from: BuildRunState; action: AnyBuildRunAction; allowedFrom: readonly BuildRunState[] };
 
 export function nextState(input: TransitionInput): TransitionResult {
   const { state, action, verdict } = input;
