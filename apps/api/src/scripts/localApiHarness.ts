@@ -73,7 +73,32 @@ export async function startLocalApi(): Promise<LocalApi> {
     });
   }
 
-  const baseUrl = `http://127.0.0.1:${port}`;
+  // lib/env.ts parses process.env at import time. If something already pulled
+  // it into the module graph before this function ran, the variables set above
+  // were too late and the app is running with the wrong configuration —
+  // listening on the default port, with no issuer, so every request 401s.
+  // Fail here with the cause rather than leaving a confusing ECONNREFUSED or a
+  // wall of "auth0_not_configured".
+  const { env } = (await import("../lib/env.js")) as {
+    env: { AUTH0_ISSUER_BASE_URL?: string };
+  };
+  if (env.AUTH0_ISSUER_BASE_URL !== issuer.issuer) {
+    await new Promise<void>((r) => server.close(() => r()));
+    await issuer.close();
+    throw new Error(
+      "lib/env.ts was imported before startLocalApi() could configure it, so the " +
+        "API is running with the wrong settings. Import this harness before any " +
+        "module that reaches lib/env.ts, or import those modules dynamically " +
+        "after startLocalApi() resolves.",
+    );
+  }
+
+  // The server's real address, not the port we asked for — they differ if the
+  // requested port was already taken.
+  const address = server.address();
+  const boundPort =
+    address !== null && typeof address !== "string" ? address.port : port;
+  const baseUrl = `http://127.0.0.1:${boundPort}`;
   const tokens = new Map<string, string>();
 
   async function token(email: string): Promise<string> {

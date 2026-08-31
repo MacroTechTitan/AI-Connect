@@ -13,6 +13,7 @@
     "db:migrate": "tsx src/scripts/migrate.ts",
     "db:studio": "drizzle-kit studio",
     "smoke:build-control": "tsx src/scripts/buildControlSmoke.ts",
+    "smoke:runner": "tsx src/scripts/runnerLiveSmoke.ts",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest"
