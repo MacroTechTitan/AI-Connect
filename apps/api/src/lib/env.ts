@@ -65,6 +65,35 @@ const envSchema = z.object({
   // cloud mode (the Render default), which refuses local-only operations.
   AICONNECT_LOCAL_MODE: z.string().optional(),
   OPENCLAW_BIN: z.string().optional(),
+
+  // DevOS Agentic Build Control runner (lib/buildControl/worker/). Dispatching
+  // a build run spawns a Claude Code process on the host, so the runner is OFF
+  // unless BOTH of the first two are set: an API instance that is not meant to
+  // execute anything must never be one flag away from doing so. On Render both
+  // are unset and `start` behaves exactly as it did before the runner existed.
+  AICONNECT_RUNNER_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === "1" || v?.toLowerCase() === "true"),
+  // The ONLY directory tree a worker may be dispatched into. Every workspace
+  // is resolved through realpath and must land inside it — see
+  // lib/buildControl/worker/workspace.ts.
+  AICONNECT_RUNNER_WORKSPACE_ROOT: z.string().optional(),
+  // Claude Code executable. Overridable so a pinned or wrapped binary can be
+  // used without changing code.
+  CLAUDE_CODE_BIN: z.string().optional(),
+  // Where raw worker transcripts are written. Kept OUT of the repository the
+  // worker is editing, so a transcript never lands in the run's own diff.
+  AICONNECT_RUNNER_LOG_DIR: z.string().optional(),
+  // Hard ceiling on one dispatch. A worker that blows through it is terminated
+  // and the run FAILS — supervision means no unbounded process.
+  AICONNECT_RUNNER_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(30 * 60 * 1000),
+  // Optional model override passed to the worker.
+  AICONNECT_RUNNER_MODEL: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);
