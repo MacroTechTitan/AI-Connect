@@ -24,6 +24,15 @@ import {
 import { logSystem, logUserAction } from "../lib/logging.js";
 import { isUniqueViolation } from "../lib/pgErrors.js";
 import {
+  onRunInstruction,
+  onRunPaused,
+  onRunResumed,
+  onRunStarted,
+  onRunStopped,
+  runnerStatus,
+  type RunSnapshot,
+} from "../lib/buildControl/runnerService.js";
+import {
   assertOrgAccess,
   orgScopeFilter,
   type AuthedUserContext,
@@ -488,6 +497,11 @@ async function applyAction(
   action: BuildRunAction,
   build: (run: Record<string, unknown>, ctx: AuthedUserContext) => BuildResult,
   sideEffect?: SideEffect,
+  // Runs AFTER the transaction commits, with the updated row. This is where
+  // worker dispatch belongs: spawning a process inside the transaction would
+  // hold a connection open for the length of a build, and a rolled-back
+  // transaction would leave an orphaned worker running.
+  afterCommit?: (run: Record<string, unknown>, from: BuildRunState) => void,
 ): Promise<void> {
   const ctx = getCtx(req);
   const orgId = requireOrg(res, ctx);
@@ -610,30 +624,87 @@ async function applyAction(
     { from: currentState, to: target },
   );
 
+  // Never let a runner problem turn a successful operator action into a 500:
+  // the state change is already committed and the operator is entitled to see
+  // it. Dispatch failures surface on the run's own timeline.
+  if (afterCommit) {
+    try {
+      afterCommit(updated, currentState);
+    } catch (err) {
+      void logSystem("error", "build_control", "afterCommit hook threw", {
+        build_run_id: runId,
+        action,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   res.status(200).json(toRunResponse(updated));
 }
+
+// Maps the route's row projection onto what the runner needs. Keeps the runner
+// free of any knowledge of how this route selects its columns.
+function toRunSnapshot(run: Record<string, unknown>): RunSnapshot {
+  return {
+    id: run.id as string,
+    organizationId: run.organizationId as string,
+    projectId: run.projectId as string,
+    workerType: (run.workerType as string) ?? "claude_code",
+    title: run.title as string,
+    goal: run.goal as string,
+    acceptanceCriteria: run.acceptanceCriteria,
+    outOfScope: run.outOfScope,
+    stopAndAsk: run.stopAndAsk,
+    featureId: (run.featureId as string | null) ?? null,
+    featureWorkPacket: run.featureWorkPacket,
+    branchName: (run.branchName as string | null) ?? null,
+    worktreePath: (run.worktreePath as string | null) ?? null,
+  };
+}
+
+// Each operator action's effect on a live worker. The route decides WHAT the
+// run's state becomes; the runner decides what that means for a process.
+const RUNNER_HOOK: Partial<
+  Record<BuildRunAction, (snapshot: RunSnapshot) => void>
+> = {
+  start: (snapshot) => onRunStarted(snapshot, "start"),
+  pause: onRunPaused,
+  resume: onRunResumed,
+  stop: onRunStopped,
+};
 
 function simpleAction(
   action: BuildRunAction,
   eventType: string,
   verb: string,
 ): RequestHandler {
+  const hook = RUNNER_HOOK[action];
   return asyncRoute(async (req, res) => {
-    await applyAction(req, res, action, () => {
-      const parsed = noteSchema.safeParse(req.body ?? {});
-      if (!parsed.success) return { error: parsed.error };
-      const note = parsed.data.note;
-      return {
-        outcome: {
-          eventType,
-          summary: `${verb} by operator`,
-          details: note ? { note } : {},
-          ...(action === "stop" && note
-            ? { extraRunValues: { stopReason: note } }
-            : {}),
-        },
-      };
-    });
+    await applyAction(
+      req,
+      res,
+      action,
+      () => {
+        const parsed = noteSchema.safeParse(req.body ?? {});
+        if (!parsed.success) return { error: parsed.error };
+        const note = parsed.data.note;
+        return {
+          outcome: {
+            eventType,
+            summary: `${verb} by operator`,
+            details: note ? { note } : {},
+            // stop_reason records an OPERATOR's reason for ending a run. The
+            // runner never writes it — an execution fault is recorded on the
+            // run.failed event, not dressed up as a stop.
+            ...(action === "stop" && note
+              ? { extraRunValues: { stopReason: note } }
+              : {}),
+          },
+        };
+      },
+      undefined,
+      hook ? (run) => hook(toRunSnapshot(run)) : undefined,
+    );
   });
 }
 
@@ -643,18 +714,32 @@ const handleResume = simpleAction("resume", "run.resumed", "Run resumed");
 const handleStop = simpleAction("stop", "run.stopped", "Run stopped");
 
 const handleInstruct: RequestHandler = asyncRoute(async (req, res) => {
-  await applyAction(req, res, "instruct", () => {
-    const parsed = instructSchema.safeParse(req.body ?? {});
-    if (!parsed.success) return { error: parsed.error };
-    return {
-      outcome: {
-        eventType: "run.instruction",
-        summary: "Operator instruction sent to worker",
-        actionRequired: true,
-        details: { instruction: parsed.data.instruction },
-      },
-    };
-  });
+  const parsed = instructSchema.safeParse(req.body ?? {});
+
+  await applyAction(
+    req,
+    res,
+    "instruct",
+    () => {
+      if (!parsed.success) return { error: parsed.error };
+      return {
+        outcome: {
+          eventType: "run.instruction",
+          // Deliberately "recorded", not "delivered": whether the worker sees
+          // it now or on its next dispatch depends on the worker's
+          // capabilities, and the runner records which happened.
+          summary: "Operator instruction recorded",
+          actionRequired: true,
+          details: { instruction: parsed.data.instruction },
+        },
+      };
+    },
+    undefined,
+    (run, from) => {
+      if (!parsed.success) return;
+      onRunInstruction(toRunSnapshot(run), parsed.data.instruction, from);
+    },
+  );
 });
 
 const handleReview: RequestHandler = asyncRoute(async (req, res) => {
@@ -775,6 +860,19 @@ export function registerBuildRunRoutes(app: Express): void {
     requireAuth,
     requireHydratedUser,
     asyncRoute(handleListRuns),
+  );
+  // MUST precede /api/build-runs/:id — Express matches in registration order,
+  // and ":id" would otherwise swallow this path.
+  app.get(
+    "/api/build-runs/runner",
+    requireAuth,
+    requireHydratedUser,
+    (_req, res) => {
+      // Lets an operator see whether starting a run will actually dispatch a
+      // worker on this instance, and what that worker can and cannot do,
+      // before they start one and wonder why nothing happened.
+      res.status(200).json(runnerStatus());
+    },
   );
   app.get(
     "/api/build-runs/:id",
