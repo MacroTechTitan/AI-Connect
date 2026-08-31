@@ -68,6 +68,13 @@ pnpm db:migrate                                 # apply migrations to a NON-prod
 pnpm test:integration                           # route + DB tests against the staging DB
 ```
 
+**DevOS Agentic Build Control.** The supervised build loop — worker dispatch,
+workspace selection, independent review, the human approval gate — is
+documented in `docs/BUILD_CONTROL_RUNNER.md` and
+`docs/BUILD_CONTROL_REVIEWER.md`. It is OFF unless both
+`AICONNECT_RUNNER_ENABLED` and `AICONNECT_RUNNER_WORKSPACE_ROOT` are set, which
+they are not on Render.
+
 **Testing and the staging database.** `pnpm test` is hermetic — pure unit tests,
 no database. Anything that needs Postgres runs against the disposable local
 staging database, never production: see `docs/STAGING_DATABASE.md` for setup,

@@ -24,6 +24,18 @@ import {
 import { logSystem, logUserAction } from "../lib/logging.js";
 import { isUniqueViolation } from "../lib/pgErrors.js";
 import {
+  listWorkspaces,
+  resolveWorkspaceForRun,
+  WorkspaceSelectionError,
+} from "../lib/buildControl/worker/workspaceRegistry.js";
+import { WorkspaceViolationError } from "../lib/buildControl/worker/workspace.js";
+import { branchNameForRun } from "../lib/buildControl/worker/workspace.js";
+import { env } from "../lib/env.js";
+import {
+  requestIndependentReview,
+  reviewerStatus,
+} from "../lib/buildControl/reviewerService.js";
+import {
   onRunInstruction,
   onRunPaused,
   onRunResumed,
@@ -99,6 +111,11 @@ const createRunSchema = z.object({
   // feature_id is an external reference rather than a foreign key.
   feature_id: boundedString(200).optional(),
   feature_work_packet: z.record(z.unknown()).optional(),
+  // Which repository this run executes in, by KEY — never by path. The key is
+  // resolved against the operator-configured workspace root at create time and
+  // only the resolved absolute path is stored, so no caller and no worker can
+  // name a filesystem location. See worker/workspaceRegistry.ts.
+  workspace: boundedString(64).optional(),
 });
 
 const noteSchema = z.object({
@@ -309,6 +326,41 @@ async function handleCreateRun(req: Request, res: Response): Promise<void> {
   }
   assertOrgAccess(project.organizationId, ctx);
 
+  // Workspace selection happens HERE, before the run exists, so an unusable
+  // choice is a 400 the operator sees immediately rather than a run that fails
+  // the moment it is started. The caller names a key; only the resolved
+  // absolute path is ever persisted.
+  let worktreePath: string | null = null;
+  let branchName: string | null = null;
+  if (body.workspace !== undefined) {
+    try {
+      const workspace = resolveWorkspaceForRun({
+        root: env.AICONNECT_RUNNER_WORKSPACE_ROOT,
+        registryRaw: env.AICONNECT_RUNNER_WORKSPACES,
+        workspaceKey: body.workspace,
+        projectId: project.id,
+        // The branch is derived from the run, which does not exist yet, so a
+        // placeholder is validated here and the real name is set below.
+        branch: "main",
+      });
+      worktreePath = workspace.repoRoot;
+    } catch (err) {
+      if (
+        err instanceof WorkspaceSelectionError ||
+        err instanceof WorkspaceViolationError
+      ) {
+        res.status(400).json({
+          error:
+            err instanceof WorkspaceSelectionError ? err.code : "workspace_violation",
+          reason: err.message,
+          workspace: body.workspace,
+        });
+        return;
+      }
+      throw err;
+    }
+  }
+
   let created: Record<string, unknown>;
   try {
     created = await getDb().transaction(async (tx) => {
@@ -327,10 +379,23 @@ async function handleCreateRun(req: Request, res: Response): Promise<void> {
           workerVersion: body.worker_version ?? null,
           featureId: body.feature_id ?? null,
           featureWorkPacket: body.feature_work_packet ?? null,
+          worktreePath,
           state: "QUEUED",
         })
         .returning(runProjection);
       if (!run) throw new Error("build run insert returned no row");
+
+      // The branch name is derived from the run id, so it can only be set once
+      // the row exists. Derived, never caller-supplied: a run title must not be
+      // able to inject a git ref.
+      if (worktreePath) {
+        branchName = branchNameForRun(run.id, body.title);
+        await tx
+          .update(buildRuns)
+          .set({ branchName })
+          .where(eq(buildRuns.id, run.id));
+        (run as { branchName: string | null }).branchName = branchName;
+      }
 
       await tx.insert(buildEvents).values({
         organizationId: orgId,
@@ -341,6 +406,9 @@ async function handleCreateRun(req: Request, res: Response): Promise<void> {
         severity: "info",
         details: {
           state: "QUEUED",
+          workspace: body.workspace ?? null,
+          worktree_path: worktreePath,
+          branch_name: branchName,
           feature_id: body.feature_id ?? null,
           has_work_packet: body.feature_work_packet !== undefined,
         },
@@ -841,6 +909,83 @@ function decisionAction(action: "approve" | "reject"): RequestHandler {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Independent review
+// ---------------------------------------------------------------------------
+
+const independentReviewSchema = z.object({
+  // Provider-neutral: an operator may name one, otherwise the configured
+  // default is used. The lifecycle never hard-codes a model.
+  provider: boundedString(100).optional(),
+});
+
+const REVIEW_ERROR_STATUS: Record<string, number> = {
+  unknown_reviewer: 400,
+  reviewer_unavailable: 503,
+  invalid_state: 409,
+  state_changed: 409,
+  no_workspace: 400,
+  not_found: 404,
+  payload_failed: 500,
+  review_failed: 502,
+};
+
+// POST /api/build-runs/:id/review/independent
+//
+// Runs the independent reviewer and applies its verdict. Distinct from
+// POST /review, which records a verdict someone else already reached — this
+// one produces the verdict. Both land in build_reviews and both move the run
+// through the same state machine.
+const handleIndependentReview: RequestHandler = asyncRoute(async (req, res) => {
+  const ctx = getCtx(req);
+  const orgId = requireOrg(res, ctx);
+  if (!orgId) return;
+
+  const runId = readRunId(req, res);
+  if (!runId) return;
+
+  const parsed = independentReviewSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    badRequest(res, parsed.error);
+    return;
+  }
+
+  const run = await loadRun(runId, ctx);
+  if (!run) {
+    res.status(404).json({ error: "build_run_not_found" });
+    return;
+  }
+
+  const outcome = await requestIndependentReview(
+    toRunSnapshot(run),
+    parsed.data.provider,
+  );
+
+  if (!outcome.ok) {
+    res.status(REVIEW_ERROR_STATUS[outcome.code] ?? 500).json({
+      error: outcome.code,
+      reason: outcome.reason,
+    });
+    return;
+  }
+
+  await logUserAction(
+    ctx.userId,
+    "build_run_independent_review",
+    "build_run",
+    runId,
+    orgId,
+    { verdict: outcome.verdict, to: outcome.state },
+  );
+
+  const updated = await loadRun(runId, ctx);
+  res.status(200).json({
+    verdict: outcome.verdict,
+    review_id: outcome.reviewId,
+    build_run: updated ? toRunResponse(updated) : null,
+  });
+});
+
 const handleApprove = decisionAction("approve");
 const handleReject = decisionAction("reject");
 
@@ -871,7 +1016,40 @@ export function registerBuildRunRoutes(app: Express): void {
       // Lets an operator see whether starting a run will actually dispatch a
       // worker on this instance, and what that worker can and cannot do,
       // before they start one and wonder why nothing happened.
-      res.status(200).json(runnerStatus());
+      res.status(200).json({
+        ...runnerStatus(),
+        // The reviewer is reported alongside the worker so an operator can see
+        // in one call whether the full supervised loop is available here.
+        reviewer: reviewerStatus(),
+      });
+    },
+  );
+  // Also before :id. Lets an operator see which repositories a run may be
+  // created against, so a workspace key is chosen from a known list rather
+  // than guessed.
+  app.get(
+    "/api/build-runs/workspaces",
+    requireAuth,
+    requireHydratedUser,
+    (_req, res) => {
+      try {
+        res.status(200).json({
+          workspace_root: env.AICONNECT_RUNNER_WORKSPACE_ROOT ?? null,
+          // An allow-list means only these keys are selectable; without one,
+          // any git repository directly beneath the root is.
+          allow_list: env.AICONNECT_RUNNER_WORKSPACES !== undefined,
+          workspaces: listWorkspaces({
+            root: env.AICONNECT_RUNNER_WORKSPACE_ROOT,
+            registryRaw: env.AICONNECT_RUNNER_WORKSPACES,
+          }),
+        });
+      } catch (err) {
+        // A malformed registry is an operator configuration error, not a 500.
+        res.status(500).json({
+          error: "invalid_workspace_registry",
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
     },
   );
   app.get(
@@ -898,6 +1076,12 @@ export function registerBuildRunRoutes(app: Express): void {
     handleInstruct,
   );
   app.post("/api/build-runs/:id/review", requireAuth, requireHydratedUser, handleReview);
+  app.post(
+    "/api/build-runs/:id/review/independent",
+    requireAuth,
+    requireHydratedUser,
+    handleIndependentReview,
+  );
   app.post(
     "/api/build-runs/:id/approve",
     requireAuth,

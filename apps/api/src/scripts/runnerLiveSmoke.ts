@@ -17,7 +17,9 @@
 //   * normalized worker events reached build_events
 //   * the file Claude was asked to write actually exists
 //   * diff statistics and cost were captured from the real run
-//   * the run reached REVIEWING — and stopped there, awaiting a human
+//   * the run reached REVIEWING
+//   * a REAL independent reviewer then judged it and moved it to
+//     AWAITING_APPROVAL — and stopped there, awaiting a human
 //
 // It cleans up the repository and its own database rows afterwards.
 
@@ -70,6 +72,10 @@ function check(label: string, ok: boolean, detail?: unknown): void {
   if (detail !== undefined) {
     process.stdout.write("        got: " + JSON.stringify(detail) + "\n");
   }
+}
+
+function line(text: string): void {
+  process.stdout.write(text + String.fromCharCode(10));
 }
 
 function section(title: string): void {
@@ -335,7 +341,96 @@ async function main(): Promise<void> {
     check("nothing was pushed anywhere (no remote exists)", git("remote").trim() === "", git("remote"));
     check("the base commit history is intact", commits === "1", commits);
 
+    // --- independent review (a SECOND real Claude Code process) -------------
+    section("Independent review by a real reviewer");
+
+    const reviewRes = await post<{ verdict: string; build_run: Run }>(
+      `/api/build-runs/${runId}/review/independent`,
+      {},
+    );
+    check(
+      "the reviewer produced a verdict",
+      reviewRes.status === 200 && typeof reviewRes.body.verdict === "string",
+      reviewRes.body,
+    );
+
+    if (reviewRes.status === 200) {
+      const verdict = reviewRes.body.verdict;
+      line(`        verdict: ${verdict}`);
+      const reviewed = reviewRes.body.build_run;
+
+      check(
+        "the verdict is one of the three, and nothing else",
+        ["PASS", "REVISION_REQUIRED", "STOP"].includes(verdict),
+        verdict,
+      );
+      check(
+        "the run moved to the state that verdict implies",
+        (verdict === "PASS" && reviewed.state === "AWAITING_APPROVAL") ||
+          (verdict === "REVISION_REQUIRED" && reviewed.state === "REVISION_REQUIRED") ||
+          (verdict === "STOP" && reviewed.state === "STOPPED"),
+        { verdict, state: reviewed.state },
+      );
+      check(
+        "the reviewer did not complete the run itself",
+        reviewed.state !== "COMPLETED",
+        reviewed.state,
+      );
+
+      const reviewRows = await pool.query(
+        `SELECT reviewer, verdict, summary, findings FROM build_reviews WHERE build_run_id = $1`,
+        [runId],
+      );
+      check("the review was persisted", reviewRows.rowCount === 1, reviewRows.rowCount);
+      check(
+        "it is attributed to the reviewer, not the worker",
+        reviewRows.rows[0]?.reviewer !== "claude_code",
+        reviewRows.rows[0]?.reviewer,
+      );
+
+      const stillNoApproval = await pool.query(
+        `SELECT 1 FROM build_approvals WHERE build_run_id = $1`,
+        [runId],
+      );
+      check(
+        "the reviewer created no approval — that gate is a human's",
+        stillNoApproval.rowCount === 0,
+        stillNoApproval.rowCount,
+      );
+
+      const afterEvents = await get<{ events: BuildEvent[] }>(
+        `/api/build-runs/${runId}/events?limit=500`,
+      );
+      const reviewTypes = afterEvents.body.events.map((e) => e.event_type);
+      check("the review start was recorded", reviewTypes.includes("review.started"), reviewTypes);
+      check("the verdict was recorded", reviewTypes.includes("review.completed"), reviewTypes);
+
+      const startedEvent = afterEvents.body.events.find((e) => e.event_type === "review.started");
+      check(
+        "redaction counts are on the timeline, and the payload is not",
+        startedEvent?.details.redactions !== undefined &&
+          !JSON.stringify(startedEvent?.details).includes("Build Control dispatched this."),
+        Object.keys((startedEvent?.details.redactions ?? {}) as object),
+      );
+
+      // The reviewer had read-only tools, so the workspace must be untouched
+      // by it — the only change is still the worker's one file.
+      const changedNow = git("status", "--porcelain")
+        .split(String.fromCharCode(10))
+        .map((l) => l.trim())
+        .filter(Boolean);
+      check(
+        "the reviewer changed nothing in the workspace",
+        changedNow.length === 1 && (changedNow[0] ?? "").includes(TARGET_FILE),
+        changedNow,
+      );
+    }
+
     // --- cleanup ------------------------------------------------------------
+    await pool.query(`DELETE FROM build_reviews WHERE build_run_id IN
+        (SELECT id FROM build_runs WHERE project_id IN
+          (SELECT id FROM projects WHERE organization_id IN
+            (SELECT organization_id FROM users WHERE email = $1)))`, [email]);
     await pool.query(
       `DELETE FROM projects WHERE organization_id IN
          (SELECT organization_id FROM users WHERE email = $1)`, [email]);

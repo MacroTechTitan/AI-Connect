@@ -93,6 +93,37 @@ or the npm layout the shim points at
 cannot, the runner reports itself unavailable with a reason, before a run
 starts.
 
+## Workspace selection
+
+A run names its repository by **key**, never by path:
+
+```
+GET  /api/build-runs/workspaces      # what may be chosen here
+POST /api/build-runs                 { ..., "workspace": "devos" }
+```
+
+The key is resolved at create time against `AICONNECT_RUNNER_WORKSPACE_ROOT`,
+and only the resolved absolute path is stored on the run. An unusable choice is
+a `400` the operator sees immediately, not a run that fails when started.
+
+`AICONNECT_RUNNER_WORKSPACES` is an optional JSON allow-list:
+
+```json
+{ "devos": { "path": "DevOS", "projects": ["<project-uuid>"], "description": "DevOS docs" } }
+```
+
+When it is set, **only** the keys it declares are selectable — dropping a
+repository under the root does not silently make it dispatchable. `projects`
+binds a workspace to specific projects, so a run on one project cannot execute
+in another project's repository. Without an allow-list, any git repository
+directly beneath the root is selectable by its directory name.
+
+Keys are slugs: lowercase alphanumerics, dot, underscore and hyphen, up to 64
+characters, no leading dash. No separators and no traversal, so a key cannot
+become a path. Everything after that is the containment check below, and the
+stored path is **re-validated on every dispatch** rather than trusted because
+it is persisted.
+
 ## Security boundaries
 
 Three layers, in decreasing order of strength. Only the first two are real
@@ -140,9 +171,11 @@ worker faults                            → FAILED                (runner)
 operator stops                           → STOPPED               (operator)
 ```
 
-`STOPPED` is reserved for an operator's decision and `FAILED` for an execution
-fault. The runner never writes `stop_reason` — the failure cause goes on the
-`run.failed` event and into `current_activity`.
+`STOPPED` is reserved for a deliberate decision to end a run — an operator's
+stop, or an independent reviewer's STOP verdict, each attributed in
+`stop_reason`. `FAILED` is for an execution fault, and **the runner never
+writes `stop_reason`**: a failure cause goes on the `run.failed` event and
+into `current_activity`, because a fault is nobody's decision.
 
 ### Events
 
@@ -238,11 +271,11 @@ deterministically and for free.
 
 ## Known gaps
 
-- **The workspace is read from `build_runs.worktree_path`**, which nothing
-  currently sets — projects do not yet carry a repository path. Until Project
-  Genesis provides one, it is set out of band. A run with no workspace it can
-  resolve inside the authorized root fails with `workspace_violation`, which is
-  the correct failure but not yet a good operator experience.
+- **A run must name its workspace at create time.** Projects do not yet
+  carry a repository, so the run chooses one by key (see Workspace
+  selection above). A run created without one cannot be dispatched: there
+  is deliberately no fallback to the workspace root, because the root is a
+  directory of repositories rather than a repository.
 - **The failure cause lives on the `run.failed` event and in
   `current_activity`**, not in a dedicated column. `stop_reason` was left alone
   on purpose — it means "why an operator stopped this". A `failure_reason`
@@ -250,5 +283,6 @@ deterministically and for free.
 - **Live run state is per-process.** Queued instructions and pause intent do
   not survive an API restart; the session id and base commit do, because they
   are on the timeline.
-- **No independent reviewer.** A completed run sits in `REVIEWING` until a
-  reviewer posts a verdict. That is the next slice, not this one.
+- **The independent reviewer is a separate boundary**, documented in
+  `docs/BUILD_CONTROL_REVIEWER.md`. A completed run sits in `REVIEWING`
+  until a reviewer returns a verdict.
