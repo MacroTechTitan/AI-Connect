@@ -84,6 +84,9 @@ function parseArgs(argv: string[]): Args {
       case "--print-api": args.printApi = true; break;
       case "-h":
       case "--help": args.help = true; break;
+      // pnpm forwards its own `--` separator through to the script.
+      case "--":
+        break;
       default:
         if (flag.startsWith("--")) {
           process.stderr.write(`unknown flag: ${flag}\n`);
